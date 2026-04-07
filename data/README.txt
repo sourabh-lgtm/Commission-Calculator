@@ -6,6 +6,35 @@ Place your CRM exports in this folder. The app reads these files at startup.
 FILES REQUIRED
 --------------
 
+OPTION A (recommended): Humaans HR Export
+  Drop humaans_export.csv in this folder.
+  Export from Humaans → People → Export (CSV).
+  This is the source of truth for employees, roles, salaries, and managers.
+  The app reads it at startup and builds the full employee + salary history tables.
+  Note: humaans_export.csv is gitignored (contains employee PII).
+
+  The loader automatically:
+  - Determines each employee's CURRENT role from the latest role effective date
+  - Determines PLAN START DATE as the first date they held the current commission role
+    (so a manager-email-only change doesn't push the plan start forward)
+  - Builds a SALARY HISTORY timeline for prorated bonus calculations (AM/CS)
+  - Resolves MANAGER relationships via Manager email → Employee ID
+
+  Job title → commission role mapping (src/humaans_loader.py, _TITLE_RULES):
+    "Sales Development Representative *"  → sdr  (monthly, fixed rates)
+    "Enterprise Sales Development Rep"    → sdr
+    "Account Manager / Senior AM"         → am   (quarterly, % of salary)
+    "Account Executive / Mid-market AE"   → ae   (quarterly, % of salary)
+    "Customer Success *"                  → cs   (quarterly, % of salary)
+    "Solutions Engineer / Senior SE"      → se
+    "VP Revenue / VP Sales / Head of Sales" → sales_director
+    "CFO / Chief Financial Officer"       → cfo
+    All other titles                      → other (not commissioned)
+
+OPTION B (fallback): employees.csv
+  If humaans_export.csv is not present, the app falls back to a hand-maintained
+  employees.csv with the following columns:
+
 1. employees.csv
    Columns: employee_id, name, title, role, region, country, currency,
             manager_id, email, plan_start_date, plan_end_date
@@ -42,6 +71,22 @@ FILES REQUIRED
    - month: first day of the month, format YYYY-MM-DD
    - Rates used to convert ACV-based commissions from EUR to local currency
    - Update monthly
+
+COMMISSION PAYOUT TIMING
+------------------------
+
+  SDR:  Monthly calculation, monthly payout
+        - Fixed rates per SAO (outbound/inbound) in local currency (SEK/GBP/EUR)
+        - Percentage of ACV on closed won (5% outbound, 1% inbound), FX'd monthly
+        - Quarterly accelerator top-up if >9 SAOs in the quarter
+
+  AM / CS:  Quarterly calculation, quarterly payout  [plans coming soon]
+        - Bonus = % of annual salary, paid quarterly
+        - If salary changes mid-quarter: prorated by calendar days
+        - If role changes mid-quarter: each role segment uses its own bonus %
+        - Salary history sourced from humaans_export.csv
+
+  AE / SE:  To be defined
 
 FILES AUTO-MANAGED
 ------------------

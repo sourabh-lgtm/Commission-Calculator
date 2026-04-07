@@ -19,12 +19,16 @@ class BaseCommissionPlan(ABC):
         activities: pd.DataFrame,
         closed_won: pd.DataFrame,
         fx_df: pd.DataFrame,
+        salary_history: pd.DataFrame,
     ) -> dict:
         """Return a dict of commission components for one employee-month.
 
         Keys must include at minimum:
             employee_id, month, total_commission, currency
         Plus one key per commission component (e.g. outbound_sao_comm).
+
+        salary_history is provided for roles that base commission on salary (AM, CS).
+        SDR plans can ignore it.
         """
         ...
 
@@ -35,11 +39,14 @@ class BaseCommissionPlan(ABC):
         year: int,
         quarter: int,
         activities: pd.DataFrame,
+        salary_history: pd.DataFrame,
     ) -> dict:
-        """Return a dict with the quarterly accelerator top-up amount (if any).
+        """Return a dict with the quarterly accelerator / bonus amount (if any).
 
         Keys: employee_id, year, quarter, quarter_end_month,
-              total_saos, threshold, excess_outbound_saos, accelerator_topup, currency
+              accelerator_topup, currency
+        Return accelerator_topup=0 if nothing applies.
+        salary_history is provided for salary-based bonus roles.
         """
         ...
 

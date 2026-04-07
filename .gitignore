@@ -15,6 +15,9 @@ output/
 # Config with credentials
 config.ini
 
+# HR data — contains employee PII
+data/humaans_export.csv
+
 # Data files (may contain sensitive commission data)
 # data/*.csv
 

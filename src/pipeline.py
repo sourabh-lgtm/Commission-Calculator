@@ -9,6 +9,7 @@ from src.commission_plans import get_plan
 class CommissionModel:
     def __init__(self):
         self.employees: pd.DataFrame = pd.DataFrame()
+        self.salary_history: pd.DataFrame = pd.DataFrame()
         self.sdr_activities: pd.DataFrame = pd.DataFrame()
         self.closed_won: pd.DataFrame = pd.DataFrame()
         self.fx_rates: pd.DataFrame = pd.DataFrame()
@@ -23,17 +24,18 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model = CommissionModel()
 
     # ------------------------------------------------------------------
-    # Stage 1: Load CSVs
+    # Stage 1: Load data (Humaans export if present, else employees.csv)
     # ------------------------------------------------------------------
     print("[Pipeline] Stage 1: Loading data...")
     data = load_all(data_dir)
     model.employees      = data["employees"]
+    model.salary_history = data["salary_history"]
     model.sdr_activities = data["sdr_activities"]
     model.closed_won     = data["closed_won"]
     model.fx_rates       = data["fx_rates"]
 
     # ------------------------------------------------------------------
-    # Stage 2: Build activity calendar (all months across data)
+    # Stage 2: Build activity calendar (all months present in activity data)
     # ------------------------------------------------------------------
     print("[Pipeline] Stage 2: Building activity calendar...")
     all_months = _discover_months(model)
@@ -41,50 +43,53 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.default_month = model.active_months[-1] if model.active_months else None
 
     # ------------------------------------------------------------------
-    # Stage 3: Calculate monthly commissions
+    # Stage 3: Calculate monthly commissions (per commission-eligible role)
     # ------------------------------------------------------------------
     print("[Pipeline] Stage 3: Calculating monthly commissions...")
     monthly_rows = []
-    sdrs = model.employees[model.employees["role"] == "sdr"]
 
-    for _, emp in sdrs.iterrows():
-        plan = get_plan(emp["role"])
-        if plan is None:
-            continue
-        plan_instance = plan()
+    # Only process roles that have a registered commission plan
+    commissioned = model.employees[
+        model.employees["role"].apply(lambda r: get_plan(r) is not None)
+    ]
+
+    for _, emp in commissioned.iterrows():
+        plan_cls = get_plan(emp["role"])
+        plan     = plan_cls()
         for month in model.active_months:
-            # Pro-rata: skip months entirely outside the employee plan period
-            if emp["plan_start_date"] and month < emp["plan_start_date"].to_period("M").to_timestamp():
+            # Pro-rata: skip months outside the employee's plan window
+            if pd.notna(emp["plan_start_date"]) and month < emp["plan_start_date"].to_period("M").to_timestamp():
                 continue
-            if emp["plan_end_date"] and month > emp["plan_end_date"].to_period("M").to_timestamp():
+            if pd.notna(emp["plan_end_date"]) and month > emp["plan_end_date"].to_period("M").to_timestamp():
                 continue
-            row = plan_instance.calculate_monthly(
+            row = plan.calculate_monthly(
                 emp, month,
                 model.sdr_activities,
                 model.closed_won,
                 model.fx_rates,
+                model.salary_history,
             )
             monthly_rows.append(row)
 
     model.commission_monthly = pd.DataFrame(monthly_rows) if monthly_rows else pd.DataFrame()
 
     # ------------------------------------------------------------------
-    # Stage 4: Calculate quarterly accelerators
+    # Stage 4: Calculate quarterly accelerators / bonuses
     # ------------------------------------------------------------------
     print("[Pipeline] Stage 4: Calculating quarterly accelerators...")
     accel_rows = []
     years_quarters = _discover_year_quarters(model.active_months)
 
-    for _, emp in sdrs.iterrows():
-        plan = get_plan(emp["role"])
-        if plan is None:
-            continue
-        plan_instance = plan()
+    for _, emp in commissioned.iterrows():
+        plan_cls = get_plan(emp["role"])
+        plan     = plan_cls()
         for (year, quarter) in years_quarters:
-            row = plan_instance.calculate_quarterly_accelerator(
-                emp, year, quarter, model.sdr_activities
+            row = plan.calculate_quarterly_accelerator(
+                emp, year, quarter,
+                model.sdr_activities,
+                model.salary_history,
             )
-            if row["accelerator_topup"] > 0:
+            if row.get("accelerator_topup", 0) > 0:
                 accel_rows.append(row)
 
     model.accelerators = pd.DataFrame(accel_rows) if accel_rows else pd.DataFrame()
@@ -101,17 +106,19 @@ def run_pipeline(data_dir: str) -> CommissionModel:
                 model.commission_monthly.loc[mask, "total_commission"]  += acc["accelerator_topup"]
 
     # ------------------------------------------------------------------
-    # Stage 5: Build consolidated detail table
+    # Stage 5: Build consolidated commission_detail table
     # ------------------------------------------------------------------
     print("[Pipeline] Stage 5: Building report tables...")
     if not model.commission_monthly.empty:
-        emp_meta = model.employees[
-            ["employee_id", "name", "title", "role", "region", "country", "manager_id"]
-        ]
+        emp_meta = model.employees[[
+            "employee_id", "name", "title", "role", "region", "country", "manager_id"
+        ]]
         model.commission_detail = model.commission_monthly.merge(
             emp_meta, on="employee_id", how="left"
         )
-        model.commission_detail["quarter"] = model.commission_detail["month"].apply(month_to_quarter)
+        model.commission_detail["quarter"] = (
+            model.commission_detail["month"].apply(month_to_quarter)
+        )
 
     print("[Pipeline] Done.")
     return model

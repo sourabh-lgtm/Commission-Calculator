@@ -226,10 +226,26 @@ def load_fx_rates(data_dir: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 def load_all(data_dir: str) -> dict:
-    employees = load_employees(data_dir)
+    # Prefer Humaans export if present; fall back to hand-maintained employees.csv
+    humaans_path = os.path.join(data_dir, "humaans_export.csv")
+    if os.path.exists(humaans_path):
+        from src.humaans_loader import load_humaans
+        employees, salary_history = load_humaans(data_dir)
+    else:
+        employees      = load_employees(data_dir)
+        salary_history = _empty_salary_history()
+
     return {
         "employees":      employees,
+        "salary_history": salary_history,
         "sdr_activities": load_sao_commission_data(data_dir, employees),
         "closed_won":     load_closed_won(data_dir),
         "fx_rates":       load_fx_rates(data_dir),
     }
+
+
+def _empty_salary_history() -> "pd.DataFrame":
+    return pd.DataFrame(columns=[
+        "employee_id", "effective_date", "end_date",
+        "salary_monthly", "salary_currency", "title_at_time", "role_at_time",
+    ])
