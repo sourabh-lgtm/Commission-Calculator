@@ -147,21 +147,13 @@ class SDRCommissionPlan(BaseCommissionPlan):
             (activities["month"].isin(months))
         ].sort_values("date")
 
-        total_saos    = len(act)
-        out_saos      = int((act["sao_type"] == "outbound").sum())
-        in_saos       = int((act["sao_type"] == "inbound").sum())
-        excess        = max(0, total_saos - QUARTERLY_SAO_TARGET)
+        total_saos = len(act)
+        out_saos   = int((act["sao_type"] == "outbound").sum())
+        in_saos    = int((act["sao_type"] == "inbound").sum())
 
-        # Only outbound SAOs in the "excess" positions earn the accelerator top-up.
-        # We walk the chronological list and count how many excess positions are outbound.
-        excess_outbound = 0
-        if excess > 0:
-            types = list(act["sao_type"])
-            count = 0
-            for t in types:
-                count += 1
-                if count > QUARTERLY_SAO_TARGET and t == "outbound":
-                    excess_outbound += 1
+        # Accelerator triggers only when outbound SAOs >= threshold.
+        # Excess = all SAOs (inbound + outbound) beyond the threshold.
+        excess_outbound = max(0, total_saos - QUARTERLY_SAO_TARGET) if out_saos >= QUARTERLY_SAO_TARGET else 0
 
         topup_per_sao = rates["accelerator_sao"] - rates["outbound_sao"]
         accelerator_topup = round(excess_outbound * topup_per_sao, 2)
@@ -176,7 +168,7 @@ class SDRCommissionPlan(BaseCommissionPlan):
             "outbound_saos":      out_saos,
             "inbound_saos":       in_saos,
             "threshold":          QUARTERLY_SAO_TARGET,
-            "excess_saos":        excess,
+            "excess_saos":        excess_outbound,
             "excess_outbound":    excess_outbound,
             "topup_per_sao":      topup_per_sao,
             "accelerator_topup":  accelerator_topup,
