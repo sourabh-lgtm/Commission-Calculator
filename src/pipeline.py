@@ -16,6 +16,7 @@ class CommissionModel:
         self.commission_monthly: pd.DataFrame = pd.DataFrame()
         self.accelerators: pd.DataFrame = pd.DataFrame()
         self.commission_detail: pd.DataFrame = pd.DataFrame()
+        self.spif_awards: pd.DataFrame = pd.DataFrame()
         self.active_months: list[pd.Timestamp] = []
         self.default_month: pd.Timestamp | None = None
 
@@ -119,6 +120,74 @@ def run_pipeline(data_dir: str) -> CommissionModel:
         model.commission_detail["quarter"] = (
             model.commission_detail["month"].apply(month_to_quarter)
         )
+
+    # ------------------------------------------------------------------
+    # Stage 6: SPIFs — calculate, merge into commission totals, rebuild detail
+    # ------------------------------------------------------------------
+    print("[Pipeline] Stage 6: Calculating SPIFs...")
+    from src.spif import calculate_all_spifs
+    model.spif_awards = calculate_all_spifs(
+        data_dir,
+        model.sdr_activities,
+        model.closed_won,
+        model.employees,
+        model.fx_rates,
+    )
+
+    if not model.spif_awards.empty:
+        # Ensure spif_amount column exists
+        if not model.commission_monthly.empty:
+            if "spif_amount" not in model.commission_monthly.columns:
+                model.commission_monthly["spif_amount"] = 0.0
+
+        for _, spif in model.spif_awards.iterrows():
+            emp_id    = spif["employee_id"]
+            pay_month = spif["payment_month"]
+            amount    = float(spif["amount"])
+            currency  = spif["currency"]
+
+            if not model.commission_monthly.empty:
+                mask = (
+                    (model.commission_monthly["employee_id"] == emp_id) &
+                    (model.commission_monthly["month"] == pay_month)
+                )
+                if mask.any():
+                    model.commission_monthly.loc[mask, "spif_amount"]     += amount
+                    model.commission_monthly.loc[mask, "total_commission"] += amount
+                    continue
+
+            # No existing commission row for this employee+month (e.g. AE SPIF in April)
+            # Build a minimal stub row so the SPIF appears in workings
+            num_cols = (model.commission_monthly.select_dtypes(include="number").columns.tolist()
+                        if not model.commission_monthly.empty else [])
+            stub = {c: 0.0 for c in num_cols}
+            stub.update({
+                "employee_id":    emp_id,
+                "month":          pay_month,
+                "currency":       currency,
+                "fx_rate":        1.0,
+                "spif_amount":    amount,
+                "total_commission": amount,
+                "accelerator_topup": 0.0,
+                "attainment_pct": 0.0,
+                "monthly_sao_target": 0,
+            })
+            model.commission_monthly = pd.concat(
+                [model.commission_monthly, pd.DataFrame([stub])],
+                ignore_index=True,
+            )
+
+        # Rebuild commission_detail to include updated totals
+        if not model.commission_monthly.empty:
+            emp_meta = model.employees[[
+                "employee_id", "name", "title", "role", "region", "country", "manager_id"
+            ]]
+            model.commission_detail = model.commission_monthly.merge(
+                emp_meta, on="employee_id", how="left"
+            )
+            model.commission_detail["quarter"] = (
+                model.commission_detail["month"].apply(month_to_quarter)
+            )
 
     print("[Pipeline] Done.")
     return model

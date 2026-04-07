@@ -68,21 +68,24 @@ def sdr_detail(model, employee_id: str, month: pd.Timestamp | None = None) -> di
     rows = []
     for _, r in df.sort_values("month").iterrows():
         rows.append({
-            "month":              r["month"].strftime("%Y-%m") if hasattr(r["month"], "strftime") else str(r["month"]),
-            "quarter":            r.get("quarter", ""),
-            "outbound_saos":      r.get("outbound_sao_count", 0),
-            "inbound_saos":       r.get("inbound_sao_count", 0),
-            "outbound_sao_comm":  r.get("outbound_sao_comm", 0),
-            "inbound_sao_comm":   r.get("inbound_sao_comm", 0),
-            "outbound_cw_acv_eur":r.get("outbound_cw_acv_eur", 0),
-            "inbound_cw_acv_eur": r.get("inbound_cw_acv_eur", 0),
-            "outbound_cw_comm":   r.get("outbound_cw_comm", 0),
-            "inbound_cw_comm":    r.get("inbound_cw_comm", 0),
-            "fx_rate":            r.get("fx_rate", 1),
-            "accelerator_topup":  r.get("accelerator_topup", 0),
-            "total_commission":   r.get("total_commission", 0),
-            "attainment_pct":     r.get("attainment_pct", 0),
-            "currency":           r.get("currency", ""),
+            "month":                     r["month"].strftime("%Y-%m") if hasattr(r["month"], "strftime") else str(r["month"]),
+            "quarter":                   r.get("quarter", ""),
+            "outbound_saos":             r.get("outbound_sao_count", 0),
+            "inbound_saos":              r.get("inbound_sao_count", 0),
+            "outbound_sao_comm":         r.get("outbound_sao_comm", 0),
+            "inbound_sao_comm":          r.get("inbound_sao_comm", 0),
+            "outbound_cw_acv_eur":       r.get("outbound_cw_acv_eur", 0),
+            "inbound_cw_acv_eur":        r.get("inbound_cw_acv_eur", 0),
+            "outbound_cw_comm":          r.get("outbound_cw_comm", 0),
+            "inbound_cw_comm":           r.get("inbound_cw_comm", 0),
+            "outbound_cw_forecast_comm": r.get("outbound_cw_forecast_comm", 0),
+            "inbound_cw_forecast_comm":  r.get("inbound_cw_forecast_comm", 0),
+            "fx_rate":                   r.get("fx_rate", 1),
+            "accelerator_topup":         r.get("accelerator_topup", 0),
+            "spif_amount":               r.get("spif_amount", 0),
+            "total_commission":          r.get("total_commission", 0),
+            "attainment_pct":            r.get("attainment_pct", 0),
+            "currency":                  r.get("currency", ""),
         })
 
     ytd_total = float(df["total_commission"].sum())
@@ -164,6 +167,28 @@ def commission_workings(model, employee_id: str, month: pd.Timestamp) -> dict:
         model.closed_won,
         model.fx_rates,
     )
+
+    # Append SPIF rows for this employee + month
+    if not model.spif_awards.empty:
+        spifs = model.spif_awards[
+            (model.spif_awards["employee_id"] == employee_id) &
+            (model.spif_awards["payment_month"] == month)
+        ]
+        for _, s in spifs.iterrows():
+            rows.append({
+                "type":             "SPIF",
+                "date":             str(s.get("close_date", "") or ""),
+                "opportunity_id":   s["spif_id"],
+                "opportunity_name": s["description"],
+                "document_number":  "",
+                "sao_type":         "",
+                "acv_eur":          None,
+                "fx_rate":          None,
+                "rate_desc":        "SPIF Award",
+                "commission":       float(s["amount"]),
+                "currency":         s["currency"],
+                "is_forecast":      False,
+            })
 
     # Summary from commission_detail
     det = model.commission_detail[

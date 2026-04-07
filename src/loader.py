@@ -187,20 +187,38 @@ def _empty_sao_df() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Closed Won
+# Closed Won  (built from InputData.csv + InvoiceSearchCommissions.csv)
 # ---------------------------------------------------------------------------
 
-def load_closed_won(data_dir: str) -> pd.DataFrame:
+def load_closed_won(data_dir: str, employees: pd.DataFrame, fx_rates: pd.DataFrame) -> pd.DataFrame:
+    """Build the closed_won commission table from Salesforce + NetSuite exports.
+
+    Falls back to the legacy closed_won.csv if InputData.csv is absent.
+    """
+    from src.closed_won_commission import build_closed_won_commission
+    input_path = os.path.join(data_dir, "InputData.csv")
+    if os.path.exists(input_path):
+        return build_closed_won_commission(data_dir, employees, fx_rates)
+
+    # Legacy fallback
+    legacy_path = os.path.join(data_dir, "closed_won.csv")
+    if not os.path.exists(legacy_path):
+        from src.closed_won_commission import _empty_df
+        return _empty_df()
+
     df = _read(
-        os.path.join(data_dir, "closed_won.csv"),
+        legacy_path,
         ["close_date", "invoice_date", "employee_id", "opportunity_id", "sao_type", "acv_eur"],
     )
     df["close_date"]   = pd.to_datetime(df["close_date"],   errors="coerce")
     df["invoice_date"] = pd.to_datetime(df["invoice_date"], errors="coerce")
     df = df.dropna(subset=["invoice_date"])
-    df["month"]    = df["invoice_date"].dt.to_period("M").dt.to_timestamp()
-    df["sao_type"] = df["sao_type"].str.strip().str.lower()
-    df["acv_eur"]  = pd.to_numeric(df["acv_eur"], errors="coerce").fillna(0)
+    df["month"]       = df["invoice_date"].dt.to_period("M").dt.to_timestamp()
+    df["sao_type"]    = df["sao_type"].str.strip().str.lower()
+    df["acv_eur"]     = pd.to_numeric(df["acv_eur"], errors="coerce").fillna(0)
+    df["is_forecast"] = False
+    df["document_number"]  = ""
+    df["invoice_currency"] = "EUR"
     return df
 
 
@@ -235,12 +253,14 @@ def load_all(data_dir: str) -> dict:
         employees      = load_employees(data_dir)
         salary_history = _empty_salary_history()
 
+    fx_rates = load_fx_rates(data_dir)
+
     return {
         "employees":      employees,
         "salary_history": salary_history,
         "sdr_activities": load_sao_commission_data(data_dir, employees),
-        "closed_won":     load_closed_won(data_dir),
-        "fx_rates":       load_fx_rates(data_dir),
+        "closed_won":     load_closed_won(data_dir, employees, fx_rates),
+        "fx_rates":       fx_rates,
     }
 
 

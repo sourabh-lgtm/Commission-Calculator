@@ -138,6 +138,29 @@ class Handler(BaseHTTPRequestHandler):
             self._respond(commission_workings(MODEL, emp_id, month))
             return
 
+        if path == "/api/spifs":
+            if MODEL.spif_awards.empty:
+                self._respond([])
+            else:
+                rows = []
+                for _, r in MODEL.spif_awards.iterrows():
+                    pm = r["payment_month"]
+                    rows.append({
+                        "employee_id":   r["employee_id"],
+                        "name":          r["name"],
+                        "spif_id":       r["spif_id"],
+                        "description":   r["description"],
+                        "amount":        float(r["amount"]),
+                        "currency":      r["currency"],
+                        "payment_month": pm.strftime("%Y-%m") if hasattr(pm, "strftime") else str(pm),
+                        "sao_date":      r.get("sao_date") or "",
+                        "close_date":    r.get("close_date") or "",
+                        "days_to_close": int(r["days_to_close"]) if r.get("days_to_close") is not None and str(r.get("days_to_close")) not in ("None","nan","") else None,
+                        "opportunity":   r.get("opportunity") or "",
+                    })
+                self._respond(rows)
+            return
+
         if path == "/api/approval_status":
             month_str = _p("month", MODEL.default_month.strftime("%Y-%m-%d") if MODEL.default_month else "")
             states    = APPROVAL.get_all_for_month(month_str)
@@ -418,6 +441,7 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
     <div class="nav-section">Individual</div>
     <div class="tab" onclick="showTab('sdr-detail')">SDR Detail</div>
     <div class="tab" onclick="showTab('workings')">Commission Workings</div>
+    <div class="tab" onclick="showTab('spif')">SPIFs</div>
     <div class="nav-section">Actions</div>
     <div class="tab" onclick="showTab('approve-send')">Approve &amp; Send</div>
     <div class="tab" onclick="showTab('data-view')">Data</div>
@@ -496,7 +520,7 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
     </select>
   </div>
   <div class="kpi-grid" id="sd-kpis"></div>
-  <div class="panel"><h3>Monthly Commission Trend</h3><canvas id="sd-chart" height="180"></canvas></div>
+  <div class="panel"><h3>Monthly Commission Trend</h3><canvas id="sd-chart" height="60"></canvas></div>
   <div class="panel">
     <h3>Monthly Breakdown</h3>
     <div class="tbl-wrap"><table id="sd-table"></table></div>
@@ -519,6 +543,13 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
     <h3>Activity Detail</h3>
     <div class="tbl-wrap"><table id="wk-table"></table></div>
   </div>
+</div>
+
+<!-- ============================================================ SPIFs -->
+<div id="tab-spif" class="tab-content">
+  <div class="page-title">SPIFs</div>
+  <p class="page-sub">Sales Performance Incentive Fund awards</p>
+  <div id="spif-body"></div>
 </div>
 
 <!-- ============================================================ APPROVE & SEND -->
@@ -643,6 +674,7 @@ function showTab(name) {
   if (name === 'quarterly-summary') loadQuarterly();
   if (name === 'sdr-detail')       loadSDRDetail();
   if (name === 'workings')         loadWorkings();
+  if (name === 'spif')             loadSPIFs();
   if (name === 'approve-send')     loadApprovalStatus();
   if (name === 'data-view')        loadDataView();
 }
@@ -773,15 +805,22 @@ async function loadSDRDetail() {
   renderLine('sd-chart', mLabels, mComms, 'Commission');
 
   // Table
-  const heads = ['Month','Q','Out SAOs','In SAOs','Out SAO $','In SAO $','Out CW $','In CW $','Accel','Total'];
-  const rowData = rows.map(r => [
-    r.month, r.quarter,
-    r.outbound_saos, r.inbound_saos,
-    fmtAmt(r.outbound_sao_comm, cur), fmtAmt(r.inbound_sao_comm, cur),
-    fmtAmt(r.outbound_cw_comm, cur), fmtAmt(r.inbound_cw_comm, cur),
-    fmtAmt(r.accelerator_topup, cur),
-    `<strong>${fmtAmt(r.total_commission, cur)}</strong>`
-  ]);
+  const heads = ['Month','Q','Out SAOs','In SAOs','Out SAO $','In SAO $','CW Invoiced $','CW Forecast $','Accel','SPIF','Total'];
+  const rowData = rows.map(r => {
+    const cwInvoiced = (r.outbound_cw_comm||0) + (r.inbound_cw_comm||0);
+    const cwForecast = (r.outbound_cw_forecast_comm||0) + (r.inbound_cw_forecast_comm||0);
+    const spif = r.spif_amount || 0;
+    return [
+      r.month, r.quarter,
+      r.outbound_saos, r.inbound_saos,
+      fmtAmt(r.outbound_sao_comm, cur), fmtAmt(r.inbound_sao_comm, cur),
+      cwInvoiced ? fmtAmt(cwInvoiced, cur) : '—',
+      cwForecast ? `<span style="color:var(--dim)">${fmtAmt(cwForecast, cur)}</span>` : '—',
+      fmtAmt(r.accelerator_topup, cur),
+      spif ? `<span style="color:var(--purple);font-weight:700">${fmtAmt(spif, cur)}</span>` : '—',
+      `<strong>${fmtAmt(r.total_commission, cur)}</strong>`
+    ];
+  });
   renderTable('sd-table', heads, rowData);
 }
 
@@ -798,21 +837,128 @@ async function loadWorkings() {
   const cur = summary.currency || 'EUR';
 
   const kpiEl = document.getElementById('wk-kpis');
+  const fcastComm = (summary.outbound_cw_forecast_comm||0) + (summary.inbound_cw_forecast_comm||0);
+  const spifAmt   = rows.filter(r => r.type === 'SPIF').reduce((s,r) => s + r.commission, 0);
   kpiEl.innerHTML = `
-    ${kpiCard('Total Commission', fmtAmt(summary.total_commission, cur), fmtMonth(month))}
+    ${kpiCard('Confirmed Commission', fmtAmt(summary.total_commission, cur), fmtMonth(month))}
     ${kpiCard('Outbound SAOs', summary.outbound_sao_count || 0, fmtAmt(summary.outbound_sao_comm||0,cur))}
     ${kpiCard('Inbound SAOs', summary.inbound_sao_count || 0, fmtAmt(summary.inbound_sao_comm||0,cur))}
     ${kpiCard('Accelerator', fmtAmt(summary.accelerator_topup||0,cur), 'Quarterly top-up')}
+    ${spifAmt   > 0 ? kpiCard('SPIF', fmtAmt(spifAmt, cur), 'Included in total') : ''}
+    ${fcastComm > 0 ? kpiCard('Forecast CW', fmtAmt(fcastComm, cur), 'Pending invoice') : ''}
   `;
 
-  const heads = ['Date','Opportunity ID','Type','Category','Rate / Formula','Commission'];
-  const rowData = rows.map(r => [
-    r.date, r.opportunity_id,
-    r.sao_type ? r.sao_type.charAt(0).toUpperCase()+r.sao_type.slice(1) : '',
-    r.type, r.rate_desc,
-    `<span class="pos">${fmtAmt(r.commission, cur)}</span>`
-  ]);
+  const heads = ['Date','Opportunity / Invoice','Direction','Category','Rate / Formula','Commission'];
+  const rowData = rows.map(r => {
+    const isSpif     = r.type === 'SPIF';
+    const isForecast = r.is_forecast;
+    const commStr = r.commission < 0
+      ? `<span style="color:var(--red)">${fmtAmt(r.commission, cur)}</span>`
+      : isSpif
+        ? `<span style="color:var(--purple);font-weight:700">${fmtAmt(r.commission, cur)}</span>`
+        : isForecast
+          ? `<span style="color:var(--dim)">${fmtAmt(r.commission, cur)} <em style="font-size:10px">(forecast)</em></span>`
+          : `<span style="color:var(--green)">${fmtAmt(r.commission, cur)}</span>`;
+    // For invoice/CW rows show opp name; for SAO rows show opportunity_id; SPIF shows description
+    const displayName = isSpif
+      ? `<span style="color:var(--purple)">${r.opportunity_name || r.opportunity_id}</span>`
+      : (r.type === 'SAO') ? r.opportunity_id : (r.opportunity_name || r.opportunity_id);
+    const oppLabel = r.document_number
+      ? `${displayName}<br><span style="font-size:10px;color:var(--dim)">${r.document_number}</span>`
+      : displayName;
+    const typeLabel = isSpif
+      ? `<span style="background:var(--purple);color:#fff;font-size:10px;padding:2px 6px;border-radius:4px;font-weight:700">SPIF</span>`
+      : r.type;
+    return [
+      r.date, oppLabel,
+      r.sao_type ? r.sao_type.charAt(0).toUpperCase()+r.sao_type.slice(1) : '',
+      typeLabel, isSpif ? '' : r.rate_desc, commStr
+    ];
+  });
   renderTable('wk-table', heads, rowData);
+}
+
+// ============================================================
+// SPIFs
+// ============================================================
+async function loadSPIFs() {
+  const res  = await fetch('/api/spifs');
+  const data = await res.json();
+  const el   = document.getElementById('spif-body');
+
+  if (!data.length) {
+    el.innerHTML = '<div class="panel" style="color:var(--dim);font-size:13px">' +
+      'No SPIF awards calculated yet.<br><br>' +
+      '<strong>AE SPIF:</strong> Fill in <code>data/spif_targets.csv</code> with each AE\'s Q1 target (q1_target_eur) to activate.<br>' +
+      '<strong>SDR SPIF:</strong> Awarded automatically for Q1 deals closing within 8 weeks of SAO.' +
+      '</div>';
+    return;
+  }
+
+  // Group by spif_id
+  const bySpif = {};
+  data.forEach(r => {
+    if (!bySpif[r.spif_id]) bySpif[r.spif_id] = [];
+    bySpif[r.spif_id].push(r);
+  });
+
+  let html = '';
+
+  const spifLabels = {
+    'sdr_q1_2026_8week':          'SDR Q1 2026 — Closed Won within 8 weeks of SAO',
+    'ae_q1_2026_first_to_target': 'AE Q1 2026 — First to Target',
+  };
+
+  for (const [spifId, rows] of Object.entries(bySpif)) {
+    const label = spifLabels[spifId] || spifId;
+    const totalByCur = {};
+    rows.forEach(r => { totalByCur[r.currency] = (totalByCur[r.currency]||0) + r.amount; });
+    const totalStr = Object.entries(totalByCur).map(([c,a]) => fmtAmt(a,c)).join(' + ');
+
+    html += `<div class="panel" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <h3>${label}</h3>
+        <span style="font-size:13px;color:var(--dim)">Total payout: <strong>${totalStr}</strong></span>
+      </div>`;
+
+    if (spifId === 'sdr_q1_2026_8week') {
+      const heads = ['SDR','Opportunity','SAO Date','Close Date','Days','Payment Month','Award'];
+      const rowData = rows.map(r => [
+        r.name,
+        `<span style="font-size:12px">${r.opportunity}</span>`,
+        r.sao_date, r.close_date,
+        `<span style="color:${r.days_to_close<=28?'var(--green)':r.days_to_close<=42?'var(--orange)':'var(--dim)'}">${r.days_to_close}d</span>`,
+        r.payment_month,
+        `<strong style="color:var(--green)">${fmtAmt(r.amount, r.currency)}</strong>`,
+      ]);
+      html += tableHtml(heads, rowData);
+    } else {
+      // AE winner
+      const r = rows[0];
+      html += `<div class="kpi-grid">
+        ${kpiCard('Winner 🏆', r.name, r.currency)}
+        ${kpiCard('Award', fmtAmt(r.amount, r.currency), 'Paid ' + r.payment_month)}
+        ${kpiCard('Achievement', r.opportunity, 'Closed by ' + r.close_date)}
+      </div>`;
+    }
+
+    html += '</div>';
+  }
+
+  el.innerHTML = html;
+}
+
+function tableHtml(heads, rows) {
+  let h = '<div style="overflow-x:auto"><table class="data-table"><thead><tr>';
+  heads.forEach(hd => h += `<th>${hd}</th>`);
+  h += '</tr></thead><tbody>';
+  rows.forEach(row => {
+    h += '<tr>';
+    row.forEach(cell => h += `<td>${cell ?? ''}</td>`);
+    h += '</tr>';
+  });
+  h += '</tbody></table></div>';
+  return h;
 }
 
 // ============================================================

@@ -75,35 +75,53 @@ class SDRCommissionPlan(BaseCommissionPlan):
         in_sao_comm  = in_saos  * rates["inbound_sao"]
 
         # Closed-won ACV commissions (EUR base × % × FX)
-        out_cw = cw[cw["sao_type"] == "outbound"]
-        in_cw  = cw[cw["sao_type"] == "inbound"]
+        # Split actual (invoiced) vs forecast rows
+        has_forecast = "is_forecast" in cw.columns
+        cw_actual   = cw[~cw["is_forecast"]] if has_forecast else cw
+        cw_forecast = cw[cw["is_forecast"]]  if has_forecast else pd.DataFrame()
 
-        out_cw_acv_eur = float(out_cw["acv_eur"].sum())
-        in_cw_acv_eur  = float(in_cw["acv_eur"].sum())
+        out_cw_actual   = cw_actual[cw_actual["sao_type"] == "outbound"]
+        in_cw_actual    = cw_actual[cw_actual["sao_type"] == "inbound"]
+        out_cw_forecast = cw_forecast[cw_forecast["sao_type"] == "outbound"] if not cw_forecast.empty else pd.DataFrame()
+        in_cw_forecast  = cw_forecast[cw_forecast["sao_type"] == "inbound"]  if not cw_forecast.empty else pd.DataFrame()
 
-        out_cw_comm = out_cw_acv_eur * PERCENTAGE_RATES["outbound_closed_won"] * fx_rate
-        in_cw_comm  = in_cw_acv_eur  * PERCENTAGE_RATES["inbound_closed_won"]  * fx_rate
+        out_cw_acv_eur          = float(out_cw_actual["acv_eur"].sum())
+        in_cw_acv_eur           = float(in_cw_actual["acv_eur"].sum())
+        out_cw_forecast_acv_eur = float(out_cw_forecast["acv_eur"].sum()) if not out_cw_forecast.empty else 0.0
+        in_cw_forecast_acv_eur  = float(in_cw_forecast["acv_eur"].sum())  if not in_cw_forecast.empty  else 0.0
 
+        out_cw_comm          = out_cw_acv_eur          * PERCENTAGE_RATES["outbound_closed_won"] * fx_rate
+        in_cw_comm           = in_cw_acv_eur           * PERCENTAGE_RATES["inbound_closed_won"]  * fx_rate
+        out_cw_forecast_comm = out_cw_forecast_acv_eur * PERCENTAGE_RATES["outbound_closed_won"] * fx_rate
+        in_cw_forecast_comm  = in_cw_forecast_acv_eur  * PERCENTAGE_RATES["inbound_closed_won"]  * fx_rate
+
+        # Only actual (invoiced) amounts count toward confirmed commission
         total = out_sao_comm + in_sao_comm + out_cw_comm + in_cw_comm
 
         return {
-            "employee_id":         emp_id,
-            "month":               month,
-            "currency":            currency,
-            "fx_rate":             fx_rate,
-            "outbound_sao_count":  out_saos,
-            "inbound_sao_count":   in_saos,
-            "total_sao_count":     out_saos + in_saos,
-            "outbound_sao_comm":   round(out_sao_comm, 2),
-            "inbound_sao_comm":    round(in_sao_comm, 2),
-            "outbound_cw_acv_eur": round(out_cw_acv_eur, 2),
-            "inbound_cw_acv_eur":  round(in_cw_acv_eur, 2),
-            "outbound_cw_comm":    round(out_cw_comm, 2),
-            "inbound_cw_comm":     round(in_cw_comm, 2),
-            "accelerator_topup":   0.0,   # filled in by quarterly pass
-            "total_commission":    round(total, 2),
-            "monthly_sao_target":  MONTHLY_SAO_TARGET,
-            "attainment_pct":      round((out_saos / MONTHLY_SAO_TARGET) * 100, 1),
+            "employee_id":                emp_id,
+            "month":                      month,
+            "currency":                   currency,
+            "fx_rate":                    fx_rate,
+            "outbound_sao_count":         out_saos,
+            "inbound_sao_count":          in_saos,
+            "total_sao_count":            out_saos + in_saos,
+            "outbound_sao_comm":          round(out_sao_comm, 2),
+            "inbound_sao_comm":           round(in_sao_comm, 2),
+            # Actual (invoiced) closed won
+            "outbound_cw_acv_eur":        round(out_cw_acv_eur, 2),
+            "inbound_cw_acv_eur":         round(in_cw_acv_eur, 2),
+            "outbound_cw_comm":           round(out_cw_comm, 2),
+            "inbound_cw_comm":            round(in_cw_comm, 2),
+            # Forecast (unmatched to NetSuite invoice yet)
+            "outbound_cw_forecast_acv":   round(out_cw_forecast_acv_eur, 2),
+            "inbound_cw_forecast_acv":    round(in_cw_forecast_acv_eur, 2),
+            "outbound_cw_forecast_comm":  round(out_cw_forecast_comm, 2),
+            "inbound_cw_forecast_comm":   round(in_cw_forecast_comm, 2),
+            "accelerator_topup":          0.0,   # filled in by quarterly pass
+            "total_commission":           round(total, 2),
+            "monthly_sao_target":         MONTHLY_SAO_TARGET,
+            "attainment_pct":             round((out_saos / MONTHLY_SAO_TARGET) * 100, 1),
         }
 
     # ------------------------------------------------------------------
@@ -202,26 +220,41 @@ class SDRCommissionPlan(BaseCommissionPlan):
                 "currency":       currency,
             })
 
-        # Closed won rows
+        # Closed won rows (actual invoices + forecast)
         cw = closed_won[
             (closed_won["employee_id"] == emp_id) & (closed_won["month"] == month)
         ].sort_values("invoice_date")
 
         for _, r in cw.iterrows():
-            sao_type = r["sao_type"]
+            sao_type   = r["sao_type"]
+            is_forecast = bool(r.get("is_forecast", False))
             pct = PERCENTAGE_RATES["outbound_closed_won"] if sao_type == "outbound" else PERCENTAGE_RATES["inbound_closed_won"]
             acv_eur = float(r["acv_eur"])
             comm = round(acv_eur * pct * fx_rate, 2)
+
+            inv_date = r.get("invoice_date")
+            date_str = inv_date.strftime("%Y-%m-%d") if pd.notna(inv_date) else ""
+            doc_num  = str(r.get("document_number", "")).strip()
+            opp_name = str(r.get("opportunity_name", r.get("opportunity_id", ""))).strip()
+
+            row_type = "Forecast CW" if is_forecast else "Closed Won"
+            label    = f"{pct*100:.0f}% of ACV × {fx_rate:.4f}"
+            if is_forecast:
+                label += " (forecast)"
+
             rows.append({
-                "type":           "Closed Won",
-                "date":           r["invoice_date"].strftime("%Y-%m-%d"),
-                "opportunity_id": r["opportunity_id"],
-                "sao_type":       sao_type,
-                "acv_eur":        acv_eur,
-                "fx_rate":        fx_rate,
-                "rate_desc":      f"{pct*100:.0f}% of ACV × {fx_rate:.4f}",
-                "commission":     comm,
-                "currency":       currency,
+                "type":             row_type,
+                "date":             date_str,
+                "opportunity_id":   r["opportunity_id"],
+                "opportunity_name": opp_name,
+                "document_number":  doc_num,
+                "sao_type":         sao_type,
+                "acv_eur":          acv_eur,
+                "fx_rate":          fx_rate,
+                "rate_desc":        label,
+                "commission":       comm,
+                "currency":         currency,
+                "is_forecast":      is_forecast,
             })
 
         return rows
