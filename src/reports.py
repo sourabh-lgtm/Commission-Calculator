@@ -248,14 +248,14 @@ def payroll_summary(model, year: int) -> dict:
             q_totals[_q(m)] += monthly[m.strftime("%Y-%m")]
         q_totals = {k: round(v, 2) for k, v in q_totals.items()}
         regions.setdefault(region, []).append({
-            "employee_id": str(emp_id),
-            "name":        emp["name"],
-            "title":       emp.get("title", ""),
-            "currency":    emp["currency"],
-            "monthly":     monthly,
+            "employee_id":      str(emp_id),
+            "name":             emp["name"],
+            "cost_center_code": emp.get("cost_center_code", ""),
+            "currency":         emp["currency"],
+            "monthly":          monthly,
             "q1": q_totals[1], "q2": q_totals[2],
             "q3": q_totals[3], "q4": q_totals[4],
-            "total":       round(sum(monthly.values()), 2),
+            "total":            round(sum(monthly.values()), 2),
         })
 
     return {
@@ -282,36 +282,45 @@ def accrual_summary(model, year: int) -> dict:
 
     def _q(m): return (m.month - 1) // 3 + 1
 
+    sdrs = model.employees[model.employees["role"] == "sdr"].copy()
     regions: dict[str, list] = {}
-    for (region, title), grp in df.groupby(["region", "title"]):
+
+    for _, emp in sdrs.iterrows():
+        emp_id = emp["employee_id"]
+        region = emp["region"]
+        edf    = df[df["employee_id"] == emp_id]
         monthly = {}
         for m in year_months:
-            mg = grp[grp["month"] == m]
+            mg = edf[edf["month"] == m]
             monthly[m.strftime("%Y-%m")] = round(float(mg["commission_eur"].sum()), 2)
         q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         for m in year_months:
             q_totals[_q(m)] += monthly[m.strftime("%Y-%m")]
         q_totals = {k: round(v, 2) for k, v in q_totals.items()}
         total = round(sum(monthly.values()), 2)
-        regions.setdefault(region, []).append({
-            "department": title,
-            "type":       "Commission",
-            "monthly":    monthly,
+
+        base = {
+            "employee_id":      str(emp_id),
+            "name":             emp["name"],
+            "cost_center_code": emp.get("cost_center_code", ""),
+            "monthly":          monthly,
             "q1": q_totals[1], "q2": q_totals[2],
             "q3": q_totals[3], "q4": q_totals[4],
-            "total":      total,
-        })
+            "total":            total,
+        }
+        regions.setdefault(region, []).append({**base, "type": "Commission"})
+
         # Employer NI for UK (13.8%)
         if region == "UK":
             ni_monthly = {k: round(v * 0.138, 2) for k, v in monthly.items()}
             ni_q       = {k: round(v * 0.138, 2) for k, v in q_totals.items()}
             regions[region].append({
-                "department": title,
-                "type":       "Employer NI (13.8%)",
-                "monthly":    ni_monthly,
+                **base,
+                "type":    "Employer NI (13.8%)",
+                "monthly": ni_monthly,
                 "q1": ni_q[1], "q2": ni_q[2],
                 "q3": ni_q[3], "q4": ni_q[4],
-                "total":      round(total * 0.138, 2),
+                "total":   round(total * 0.138, 2),
             })
 
     return {

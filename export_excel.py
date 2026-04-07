@@ -274,7 +274,7 @@ def export_payroll_workbook(model, year: int) -> bytes:
         ws.row_dimensions[3].height = 14
 
         # --- Row 4: column headers ---
-        heads = ["Employee ID", "Name", "Title", "Currency"] + month_labels + ["Q1", "Q2", "Q3", "Q4", "Total"]
+        heads = ["Employee ID", "Name", "Dept Code", "Currency"] + month_labels + ["Q1", "Q2", "Q3", "Q4", "Total"]
         for col, h in enumerate(heads, 1):
             c = ws.cell(row=4, column=col, value=h)
             c.font      = Font(name="Calibri", bold=True, color=WHITE, size=10)
@@ -291,7 +291,7 @@ def export_payroll_workbook(model, year: int) -> bytes:
         for i, emp in enumerate(emps):
             r = 5 + i
             alt = i % 2 == 0
-            vals = ([emp["employee_id"], emp["name"], emp["title"], emp["currency"]]
+            vals = ([emp["employee_id"], emp["name"], emp.get("cost_center_code",""), emp["currency"]]
                     + [emp["monthly"].get(m, 0) for m in months]
                     + [emp["q1"], emp["q2"], emp["q3"], emp["q4"], emp["total"]])
             for col, v in enumerate(vals, 1):
@@ -356,7 +356,7 @@ def export_accrual_workbook(model, year: int) -> bytes:
         region_short = "SE" if region == "Nordics" else region
         ws = wb.create_sheet(f"{region_short} FY{str(year)[2:]}")
 
-        n_cols = 2 + len(months) + 4 + 1
+        n_cols = 4 + len(months) + 4 + 1   # emp_id, name, dept_code, type + months + Q1-4 + total
 
         # --- Row 1: title ---
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
@@ -368,7 +368,7 @@ def export_accrual_workbook(model, year: int) -> bytes:
 
         # --- Row 3: quarter bands ---
         def _q(m_str): return (pd.Timestamp(m_str).month - 1) // 3 + 1
-        q_col = 3
+        q_col = 5   # cols 1-4: emp_id, name, dept_code, type
         for q in range(1, 5):
             q_months = [m for m in months if _q(m) == q]
             if q_months:
@@ -383,12 +383,12 @@ def export_accrual_workbook(model, year: int) -> bytes:
         ws.row_dimensions[3].height = 14
 
         # --- Row 4: column headers ---
-        heads = ["Department", "Type"] + month_labels + ["Q1", "Q2", "Q3", "Q4", "Total (EUR)"]
+        heads = ["Employee ID", "Name", "Dept Code", "Type"] + month_labels + ["Q1", "Q2", "Q3", "Q4", "Total (EUR)"]
         for col, h in enumerate(heads, 1):
             c = ws.cell(row=4, column=col, value=h)
             c.font      = Font(name="Calibri", bold=True, color=WHITE, size=10)
             c.fill      = PatternFill("solid", fgColor=HEADER_BG)
-            c.alignment = Alignment(horizontal="center" if col > 2 else "left", vertical="center")
+            c.alignment = Alignment(horizontal="center" if col > 4 else "left", vertical="center")
             c.border    = THIN_BORDER
         ws.row_dimensions[4].height = 18
 
@@ -401,14 +401,14 @@ def export_accrual_workbook(model, year: int) -> bytes:
             r    = 5 + i
             alt  = i % 2 == 0
             is_ni = "NI" in row["type"]
-            vals  = ([row["department"], row["type"]]
+            vals  = ([row["employee_id"], row["name"], row.get("cost_center_code",""), row["type"]]
                      + [row["monthly"].get(m, 0) for m in months]
                      + [row["q1"], row["q2"], row["q3"], row["q4"], row["total"]])
             for col, v in enumerate(vals, 1):
                 c = ws.cell(row=r, column=col, value=v)
                 c.font      = Font(name="Calibri", size=10,
                                    italic=is_ni, color="777777" if is_ni else BLACK)
-                c.alignment = Alignment(horizontal="right" if col > 2 else "left", vertical="center")
+                c.alignment = Alignment(horizontal="right" if col > 4 else "left", vertical="center")
                 c.border    = THIN_BORDER
                 if alt and not is_ni:
                     c.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
@@ -423,22 +423,24 @@ def export_accrual_workbook(model, year: int) -> bytes:
 
         # --- Totals row ---
         tr = 5 + len(rows)
-        tvals = (["TOTAL (Commission)", ""]
+        tvals = (["TOTAL (Commission)", "", "", ""]
                  + [round(t_monthly[m], 2) for m in months]
                  + [round(x, 2) for x in t_q] + [round(t_total, 2)])
         for col, v in enumerate(tvals, 1):
             c = ws.cell(row=tr, column=col, value=v)
             c.font      = Font(name="Calibri", bold=True, size=10)
             c.fill      = PatternFill("solid", fgColor=TOTAL_BG)
-            c.alignment = Alignment(horizontal="right" if col > 2 else "left", vertical="center")
+            c.alignment = Alignment(horizontal="right" if col > 4 else "left", vertical="center")
             c.border    = THIN_BORDER
             if col > 2 and isinstance(v, (int, float)):
                 c.number_format = "#,##0.00"
 
         # Column widths
-        ws.column_dimensions["A"].width = 36
-        ws.column_dimensions["B"].width = 22
-        for ci in range(3, n_cols + 1):
+        ws.column_dimensions["A"].width = 14
+        ws.column_dimensions["B"].width = 26
+        ws.column_dimensions["C"].width = 12
+        ws.column_dimensions["D"].width = 22
+        for ci in range(5, n_cols + 1):
             ws.column_dimensions[get_column_letter(ci)].width = 11
 
     buf = io.BytesIO()

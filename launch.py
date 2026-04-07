@@ -1174,7 +1174,7 @@ async function loadPayrollSummary() {
   for (const rd of regions) {
     const emps = rd.employees;
     const qCols = ['Q1','Q2','Q3','Q4'];
-    const heads = ['Employee','Title','Currency', ...month_labels, ...qCols, 'Total'];
+    const heads = ['Employee ID','Name','Dept Code','Currency', ...month_labels, ...qCols, 'Total'];
     // Build totals
     const totMonthly = Object.fromEntries(months.map(m => [m, 0]));
     const totQ = {q1:0,q2:0,q3:0,q4:0}; let totTotal = 0;
@@ -1182,17 +1182,16 @@ async function loadPayrollSummary() {
       months.forEach(m => totMonthly[m] += e.monthly[m]||0);
       totQ.q1+=e.q1; totQ.q2+=e.q2; totQ.q3+=e.q3; totQ.q4+=e.q4; totTotal+=e.total;
       return [
-        e.name, e.title, e.currency,
+        e.employee_id, e.name, e.cost_center_code||'', e.currency,
         ...months.map(m => fmtAmt(e.monthly[m]||0, e.currency)),
         fmtAmt(e.q1,e.currency), fmtAmt(e.q2,e.currency),
         fmtAmt(e.q3,e.currency), fmtAmt(e.q4,e.currency),
         `<strong>${fmtAmt(e.total,e.currency)}</strong>`
       ];
     });
-    // Totals row — mixed since regions can have one currency
     const cur = emps.length ? emps[0].currency : 'EUR';
     rowData.push([
-      '<strong>TOTAL</strong>', '', cur,
+      '', '<strong>TOTAL</strong>', '', cur,
       ...months.map(m => `<strong>${fmtAmt(totMonthly[m],cur)}</strong>`),
       `<strong>${fmtAmt(totQ.q1,cur)}</strong>`, `<strong>${fmtAmt(totQ.q2,cur)}</strong>`,
       `<strong>${fmtAmt(totQ.q3,cur)}</strong>`, `<strong>${fmtAmt(totQ.q4,cur)}</strong>`,
@@ -1241,7 +1240,7 @@ async function loadAccrualSummary() {
   for (const rd of regions) {
     const rows = rd.rows;
     const qCols = ['Q1','Q2','Q3','Q4'];
-    const heads = ['Department','Type', ...month_labels, ...qCols, 'Total (EUR)'];
+    const heads = ['Employee ID','Name','Dept Code','Type', ...month_labels, ...qCols, 'Total (EUR)'];
     const totMonthly = Object.fromEntries(months.map(m => [m, 0]));
     const totQ = {q1:0,q2:0,q3:0,q4:0}; let totTotal = 0;
     const rowData = rows.map(r => {
@@ -1255,7 +1254,9 @@ async function loadAccrualSummary() {
         ? `<span style="${style}">${fmtAmt(v,'EUR')}</span>`
         : fmtAmt(v,'EUR');
       return [
-        `<span style="${style}">${r.department}</span>`,
+        `<span style="${style}">${r.employee_id}</span>`,
+        `<span style="${style}">${r.name}</span>`,
+        `<span style="${style}">${r.cost_center_code||''}</span>`,
         `<span style="${style}">${r.type}</span>`,
         ...months.map(m => fmt(r.monthly[m]||0)),
         fmt(r.q1), fmt(r.q2), fmt(r.q3), fmt(r.q4),
@@ -1263,7 +1264,7 @@ async function loadAccrualSummary() {
       ];
     });
     rowData.push([
-      '<strong>TOTAL (Commission)</strong>', '',
+      '', '<strong>TOTAL (Commission)</strong>', '', '',
       ...months.map(m => `<strong>${fmtAmt(totMonthly[m],'EUR')}</strong>`),
       `<strong>${fmtAmt(totQ.q1,'EUR')}</strong>`, `<strong>${fmtAmt(totQ.q2,'EUR')}</strong>`,
       `<strong>${fmtAmt(totQ.q3,'EUR')}</strong>`, `<strong>${fmtAmt(totQ.q4,'EUR')}</strong>`,

@@ -157,6 +157,7 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         "Salary currency":     "salary_currency",
         "Salary frequency":    "salary_frequency",
         "Salary effective date": "salary_eff_date",
+        "Cost center - Code":  "cost_center_code",
     })
 
     # Parse dates
@@ -204,7 +205,8 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         region       = _get_region(country)
         email        = latest_role_row["email"]
         name         = latest_role_row["name"]
-        department   = latest_role_row.get("department", "")
+        department        = latest_role_row.get("department", "")
+        cost_center_code  = latest_role_row.get("cost_center_code", "")
         emp_start    = latest_role_row["employment_start"]
         manager_email = latest_role_row["manager_email"]
         manager_id   = email_to_id.get(manager_email, "")
@@ -233,19 +235,20 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         plan_end = pd.Timestamp("2026-12-31")   # FY26
 
         employees_rows.append({
-            "employee_id":    str(emp_id),
-            "name":           name,
-            "title":          title,
-            "role":           role,
-            "department":     department,
-            "region":         region,
-            "country":        country,
-            "currency":       currency,
-            "manager_id":     manager_id,
-            "email":          email,
-            "plan_start_date": plan_start,
-            "plan_end_date":  plan_end,
-            "employment_start": emp_start,
+            "employee_id":       str(emp_id),
+            "name":              name,
+            "title":             title,
+            "role":              role,
+            "department":        department,
+            "cost_center_code":  cost_center_code,
+            "region":            region,
+            "country":           country,
+            "currency":          currency,
+            "manager_id":        manager_id,
+            "email":             email,
+            "plan_start_date":   plan_start,
+            "plan_end_date":     plan_end,
+            "employment_start":  emp_start,
         })
 
         # --- Salary history: one record per unique salary_eff_date ---
