@@ -324,6 +324,19 @@ def accrual_summary(model, year: int) -> dict:
                 "total":   round(total * 0.138, 2),
             })
 
+        # Employer Social Contributions for Nordics/Sweden (31%) — in local currency (SEK)
+        if region == "Nordics":
+            sc_monthly = {k: round(v * 0.31, 2) for k, v in monthly.items()}
+            sc_q       = {k: round(v * 0.31, 2) for k, v in q_totals.items()}
+            regions[region].append({
+                **base,
+                "type":    "Employer Social Contributions (31%)",
+                "monthly": sc_monthly,
+                "q1": sc_q[1], "q2": sc_q[2],
+                "q3": sc_q[3], "q4": sc_q[4],
+                "total":   round(total * 0.31, 2),
+            })
+
     return {
         "months":       month_keys,
         "month_labels": month_labels,

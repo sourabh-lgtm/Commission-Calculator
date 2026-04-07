@@ -396,11 +396,14 @@ def export_accrual_workbook(model, year: int) -> bytes:
         t_monthly = {m: 0.0 for m in months}
         t_q = [0.0, 0.0, 0.0, 0.0]
         t_total = 0.0
+        c_monthly = {m: 0.0 for m in months}
+        c_q = [0.0, 0.0, 0.0, 0.0]
+        c_total = 0.0
 
         for i, row in enumerate(rows):
             r    = 5 + i
             alt  = i % 2 == 0
-            is_ni = "NI" in row["type"]
+            is_ni = row["type"] != "Commission"
             vals  = ([row["employee_id"], row["name"], row.get("cost_center_code",""),
                       row["type"], row.get("currency","")]
                      + [row["monthly"].get(m, 0) for m in months]
@@ -421,20 +424,33 @@ def export_accrual_workbook(model, year: int) -> bytes:
                 t_q[0] += row["q1"]; t_q[1] += row["q2"]
                 t_q[2] += row["q3"]; t_q[3] += row["q4"]
                 t_total += row["total"]
+            else:
+                for m in months:
+                    c_monthly[m] += row["monthly"].get(m, 0)
+                c_q[0] += row["q1"]; c_q[1] += row["q2"]
+                c_q[2] += row["q3"]; c_q[3] += row["q4"]
+                c_total += row["total"]
 
-        # --- Totals row ---
+        # --- Totals rows ---
+        def _write_total_row(ws, r, label, vals_data, n_cols):
+            tvals = ([label, "", "", "", ""]
+                     + [round(vals_data[m], 2) for m in months]
+                     + [round(x, 2) for x in vals_data["q"]] + [round(vals_data["total"], 2)])
+            for col, v in enumerate(tvals, 1):
+                c = ws.cell(row=r, column=col, value=v)
+                c.font      = Font(name="Calibri", bold=True, size=10)
+                c.fill      = PatternFill("solid", fgColor=TOTAL_BG)
+                c.alignment = Alignment(horizontal="right" if col > 5 else "left", vertical="center")
+                c.border    = THIN_BORDER
+                if col > 5 and isinstance(v, (int, float)):
+                    c.number_format = "#,##0.00"
+
         tr = 5 + len(rows)
-        tvals = (["TOTAL (Commission)", "", "", "", ""]
-                 + [round(t_monthly[m], 2) for m in months]
-                 + [round(x, 2) for x in t_q] + [round(t_total, 2)])
-        for col, v in enumerate(tvals, 1):
-            c = ws.cell(row=tr, column=col, value=v)
-            c.font      = Font(name="Calibri", bold=True, size=10)
-            c.fill      = PatternFill("solid", fgColor=TOTAL_BG)
-            c.alignment = Alignment(horizontal="right" if col > 5 else "left", vertical="center")
-            c.border    = THIN_BORDER
-            if col > 5 and isinstance(v, (int, float)):
-                c.number_format = "#,##0.00"
+        _write_total_row(ws, tr, "TOTAL (Commission)",
+                         {**t_monthly, "q": t_q, "total": t_total}, n_cols)
+        if c_total > 0:
+            _write_total_row(ws, tr + 1, "TOTAL (Employer Contributions)",
+                             {**c_monthly, "q": c_q, "total": c_total}, n_cols)
 
         # Column widths
         ws.column_dimensions["A"].width = 14

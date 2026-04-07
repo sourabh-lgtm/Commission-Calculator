@@ -1243,13 +1243,18 @@ async function loadAccrualSummary() {
     const heads = ['Employee ID','Name','Dept Code','Type','Currency', ...month_labels, ...qCols, 'Total'];
     const totMonthly = Object.fromEntries(months.map(m => [m, 0]));
     const totQ = {q1:0,q2:0,q3:0,q4:0}; let totTotal = 0;
-    const regionCurrency = (rows.find(r => !r.type.includes('NI')) || {}).currency || 'EUR';
+    const contMonthly = Object.fromEntries(months.map(m => [m, 0]));
+    const contQ = {q1:0,q2:0,q3:0,q4:0}; let contTotal = 0;
+    const regionCurrency = (rows.find(r => r.type === 'Commission') || {}).currency || 'EUR';
     const rowData = rows.map(r => {
-      const isNI = r.type.includes('NI');
+      const isNI = r.type !== 'Commission';
       const cur  = r.currency || regionCurrency;
       if (!isNI) {
         months.forEach(m => totMonthly[m] += r.monthly[m]||0);
         totQ.q1+=r.q1; totQ.q2+=r.q2; totQ.q3+=r.q3; totQ.q4+=r.q4; totTotal+=r.total;
+      } else {
+        months.forEach(m => contMonthly[m] += r.monthly[m]||0);
+        contQ.q1+=r.q1; contQ.q2+=r.q2; contQ.q3+=r.q3; contQ.q4+=r.q4; contTotal+=r.total;
       }
       const style = isNI ? 'color:var(--dim);font-style:italic' : '';
       const fmt = v => isNI
@@ -1272,6 +1277,13 @@ async function loadAccrualSummary() {
       `<strong>${fmtAmt(totQ.q1, regionCurrency)}</strong>`, `<strong>${fmtAmt(totQ.q2, regionCurrency)}</strong>`,
       `<strong>${fmtAmt(totQ.q3, regionCurrency)}</strong>`, `<strong>${fmtAmt(totQ.q4, regionCurrency)}</strong>`,
       `<strong>${fmtAmt(totTotal, regionCurrency)}</strong>`
+    ]);
+    if (contTotal > 0) rowData.push([
+      '', '<strong>TOTAL (Employer Contributions)</strong>', '', '', '',
+      ...months.map(m => `<strong>${fmtAmt(contMonthly[m], regionCurrency)}</strong>`),
+      `<strong>${fmtAmt(contQ.q1, regionCurrency)}</strong>`, `<strong>${fmtAmt(contQ.q2, regionCurrency)}</strong>`,
+      `<strong>${fmtAmt(contQ.q3, regionCurrency)}</strong>`, `<strong>${fmtAmt(contQ.q4, regionCurrency)}</strong>`,
+      `<strong>${fmtAmt(contTotal, regionCurrency)}</strong>`
     ]);
 
     html += `<div class="panel" style="margin-bottom:20px">
