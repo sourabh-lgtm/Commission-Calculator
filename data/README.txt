@@ -12,14 +12,23 @@ FILES REQUIRED
    - role: sdr | ae | am | cs | manager | exec | se | cfo | sales_director
    - currency: SEK | GBP | EUR
    - manager_id: references employee_id of the direct manager
+   - The name column must match exactly the SDR name in SAO_commission_data.csv
    - Employees with role=cfo or role=sales_director are auto-CC'd on all commission emails
 
-2. sdr_activities.csv
-   Columns: date, employee_id, opportunity_id, sao_type, stage
-   - sao_type: outbound | inbound
-   - stage: sao
-   - One row per qualifying Sales Accepted Opportunity event
-   - date format: YYYY-MM-DD
+2. SAO_commission_data.csv
+   Source: Salesforce CRM report export (direct download, no reformatting needed)
+   Required columns: SDR, DCT Discovery, Account Name, Lead Source, Opportunity Name
+   Optional columns: Created By, Opportunity Owner, Type, Average ARR Currency,
+                     Average ARR, New ACV (converted) Currency, New ACV (converted)
+
+   Processing rules applied automatically:
+   - Rows where SDR column is blank → ignored
+   - DCT Discovery date (format: DD/MM/YYYY, HH:MM) → determines commission month
+   - Lead Source "Outbound - *" → outbound SAO; "Inbound - *" → inbound SAO
+   - Rows with blank/unknown Lead Source → ignored
+   - 6-month account deduplication: if the same Account Name already had a
+     qualifying SAO within the past 6 months, the second occurrence is excluded
+   - SDR name is matched (case-insensitive) to employees.csv name column
 
 3. closed_won.csv
    Columns: close_date, invoice_date, employee_id, opportunity_id, sao_type, acv_eur
