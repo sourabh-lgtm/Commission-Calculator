@@ -276,7 +276,6 @@ def accrual_summary(model, year: int) -> dict:
         return {"months": [], "month_labels": [], "regions": []}
 
     df = model.commission_detail[model.commission_detail["month"].isin(year_months)].copy()
-    df["commission_eur"] = df["total_commission"] / df["fx_rate"].clip(lower=1e-6)
     month_keys   = [m.strftime("%Y-%m") for m in year_months]
     month_labels = [m.strftime("%b-%y") for m in year_months]
 
@@ -286,13 +285,14 @@ def accrual_summary(model, year: int) -> dict:
     regions: dict[str, list] = {}
 
     for _, emp in sdrs.iterrows():
-        emp_id = emp["employee_id"]
-        region = emp["region"]
-        edf    = df[df["employee_id"] == emp_id]
-        monthly = {}
+        emp_id   = emp["employee_id"]
+        region   = emp["region"]
+        currency = emp["currency"]
+        edf      = df[df["employee_id"] == emp_id]
+        monthly  = {}
         for m in year_months:
             mg = edf[edf["month"] == m]
-            monthly[m.strftime("%Y-%m")] = round(float(mg["commission_eur"].sum()), 2)
+            monthly[m.strftime("%Y-%m")] = round(float(mg["total_commission"].sum()), 2)
         q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         for m in year_months:
             q_totals[_q(m)] += monthly[m.strftime("%Y-%m")]
@@ -303,6 +303,7 @@ def accrual_summary(model, year: int) -> dict:
             "employee_id":      str(emp_id),
             "name":             emp["name"],
             "cost_center_code": emp.get("cost_center_code", ""),
+            "currency":         currency,
             "monthly":          monthly,
             "q1": q_totals[1], "q2": q_totals[2],
             "q3": q_totals[3], "q4": q_totals[4],
@@ -310,7 +311,7 @@ def accrual_summary(model, year: int) -> dict:
         }
         regions.setdefault(region, []).append({**base, "type": "Commission"})
 
-        # Employer NI for UK (13.8%)
+        # Employer NI for UK (13.8%) — in local currency (GBP)
         if region == "UK":
             ni_monthly = {k: round(v * 0.138, 2) for k, v in monthly.items()}
             ni_q       = {k: round(v * 0.138, 2) for k, v in q_totals.items()}

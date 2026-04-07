@@ -649,7 +649,7 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
 <!-- ============================================================ FINANCE ACCRUALS -->
 <div id="tab-accrual-summary" class="tab-content">
   <div class="page-title">Finance Accruals</div>
-  <p class="page-sub">Department-level commission accruals in EUR — send to finance</p>
+  <p class="page-sub">Department-level commission accruals in local currency — send to finance</p>
   <div class="controls">
     <label>Year</label>
     <select id="ac-year" onchange="loadAccrualSummary()"></select>
@@ -1240,39 +1240,42 @@ async function loadAccrualSummary() {
   for (const rd of regions) {
     const rows = rd.rows;
     const qCols = ['Q1','Q2','Q3','Q4'];
-    const heads = ['Employee ID','Name','Dept Code','Type', ...month_labels, ...qCols, 'Total (EUR)'];
+    const heads = ['Employee ID','Name','Dept Code','Type','Currency', ...month_labels, ...qCols, 'Total'];
     const totMonthly = Object.fromEntries(months.map(m => [m, 0]));
     const totQ = {q1:0,q2:0,q3:0,q4:0}; let totTotal = 0;
+    const regionCurrency = (rows.find(r => !r.type.includes('NI')) || {}).currency || 'EUR';
     const rowData = rows.map(r => {
       const isNI = r.type.includes('NI');
+      const cur  = r.currency || regionCurrency;
       if (!isNI) {
         months.forEach(m => totMonthly[m] += r.monthly[m]||0);
         totQ.q1+=r.q1; totQ.q2+=r.q2; totQ.q3+=r.q3; totQ.q4+=r.q4; totTotal+=r.total;
       }
       const style = isNI ? 'color:var(--dim);font-style:italic' : '';
       const fmt = v => isNI
-        ? `<span style="${style}">${fmtAmt(v,'EUR')}</span>`
-        : fmtAmt(v,'EUR');
+        ? `<span style="${style}">${fmtAmt(v, cur)}</span>`
+        : fmtAmt(v, cur);
       return [
         `<span style="${style}">${r.employee_id}</span>`,
         `<span style="${style}">${r.name}</span>`,
         `<span style="${style}">${r.cost_center_code||''}</span>`,
         `<span style="${style}">${r.type}</span>`,
+        `<span style="${style}">${cur}</span>`,
         ...months.map(m => fmt(r.monthly[m]||0)),
         fmt(r.q1), fmt(r.q2), fmt(r.q3), fmt(r.q4),
-        isNI ? fmt(r.total) : `<strong>${fmtAmt(r.total,'EUR')}</strong>`
+        isNI ? fmt(r.total) : `<strong>${fmtAmt(r.total, cur)}</strong>`
       ];
     });
     rowData.push([
-      '', '<strong>TOTAL (Commission)</strong>', '', '',
-      ...months.map(m => `<strong>${fmtAmt(totMonthly[m],'EUR')}</strong>`),
-      `<strong>${fmtAmt(totQ.q1,'EUR')}</strong>`, `<strong>${fmtAmt(totQ.q2,'EUR')}</strong>`,
-      `<strong>${fmtAmt(totQ.q3,'EUR')}</strong>`, `<strong>${fmtAmt(totQ.q4,'EUR')}</strong>`,
-      `<strong>${fmtAmt(totTotal,'EUR')}</strong>`
+      '', '<strong>TOTAL (Commission)</strong>', '', '', '',
+      ...months.map(m => `<strong>${fmtAmt(totMonthly[m], regionCurrency)}</strong>`),
+      `<strong>${fmtAmt(totQ.q1, regionCurrency)}</strong>`, `<strong>${fmtAmt(totQ.q2, regionCurrency)}</strong>`,
+      `<strong>${fmtAmt(totQ.q3, regionCurrency)}</strong>`, `<strong>${fmtAmt(totQ.q4, regionCurrency)}</strong>`,
+      `<strong>${fmtAmt(totTotal, regionCurrency)}</strong>`
     ]);
 
     html += `<div class="panel" style="margin-bottom:20px">
-      <h3>${rd.region} — FY${yr} (EUR)</h3>
+      <h3>${rd.region} — FY${yr} (${regionCurrency})</h3>
       <div class="tbl-wrap">${tableHtml(heads, rowData)}</div>
     </div>`;
   }

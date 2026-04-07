@@ -98,10 +98,10 @@ def _cover_page(employee, period_label, logo_path):
     elements.append(Spacer(1, 8*mm))
 
     elements.append(_para("COMMISSION STATEMENT", _style(
-        "cover_title", fontName="Helvetica-Bold", fontSize=32, textColor=BLACK, spaceAfter=6
+        "cover_title", fontName="Helvetica-Bold", fontSize=32, leading=40, textColor=BLACK, spaceAfter=6
     )))
     elements.append(_para(period_label, _style(
-        "cover_period", fontName="Helvetica", fontSize=20, textColor=DIM, spaceAfter=10
+        "cover_period", fontName="Helvetica", fontSize=20, leading=26, textColor=DIM, spaceAfter=10
     )))
     elements.append(Spacer(1, 8*mm))
     elements.append(HRFlowable(width=w, color=BORDER, thickness=1))
@@ -285,6 +285,9 @@ def _workings_page(employee, period_label, rows, currency):
     header = ["Date", "Opportunity / Deal", "Direction", "Category", "Rate / Formula", f"Commission ({currency})"]
     data = [header]
 
+    _cell_style = ParagraphStyle("wk_cell", fontName="Helvetica", fontSize=9, leading=11)
+    _spif_style = ParagraphStyle("wk_spif", fontName="Helvetica-Bold", fontSize=9, leading=11, textColor=PURPLE)
+
     total = 0.0
     spif_row_indices = []
 
@@ -299,8 +302,9 @@ def _workings_page(employee, period_label, rows, currency):
         if is_spif:
             opp = r.get("opportunity_name") or r.get("description", opp)
 
-        doc_num = r.get("document_number", "")
-        opp_cell = f"{opp}\n{doc_num}" if doc_num else opp
+        doc_num  = r.get("document_number", "")
+        opp_text = f"{opp}<br/>{doc_num}" if doc_num else str(opp)
+        opp_cell = Paragraph(opp_text, _spif_style if is_spif else _cell_style)
 
         direction = (r.get("sao_type") or "").title()
         rate_desc = r.get("rate_desc", "") if not is_spif else "SPIF Award"
