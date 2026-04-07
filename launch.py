@@ -343,6 +343,9 @@ nav .tab{padding:9px 20px;cursor:pointer;font-size:13px;color:var(--dim);border-
 nav .tab:hover{color:var(--text)}
 nav .tab.active{color:#000;font-weight:700;background:linear-gradient(90deg,rgba(255,145,120,.18),transparent);border-left-color:var(--accent)}
 nav .nav-section{font-size:9px;font-weight:700;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;padding:16px 20px 4px}
+nav .global-filter{padding:12px 20px;border-bottom:1px solid var(--border)}
+nav .global-filter label{display:block;font-size:9px;font-weight:700;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;margin-bottom:6px}
+nav .global-filter select{width:100%;font-size:12px;padding:6px 10px}
 
 /* MAIN */
 main{flex:1;overflow-y:auto;padding:24px 32px}
@@ -433,6 +436,10 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
     <small>Normative</small>
     <h1>Commissions</h1>
   </div>
+  <div class="global-filter">
+    <label>Month</label>
+    <select id="global-month" onchange="onGlobalMonthChange()"></select>
+  </div>
   <div class="tabs">
     <div class="nav-section">Team</div>
     <div class="tab active" onclick="showTab('team-overview')">Team Overview</div>
@@ -455,8 +462,6 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
   <div class="page-title">Team Overview</div>
   <p class="page-sub">SDR commissions for the selected month</p>
   <div class="controls">
-    <label>Month</label>
-    <select id="to-month" onchange="loadTeamOverview()"></select>
     <button class="btn" onclick="exportCSV('team-overview')">Export CSV</button>
   </div>
   <div class="kpi-grid" id="to-kpis"></div>
@@ -474,10 +479,6 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
 <div id="tab-monthly-summary" class="tab-content">
   <div class="page-title">Monthly Summary</div>
   <p class="page-sub">All SDRs side-by-side for the selected month</p>
-  <div class="controls">
-    <label>Month</label>
-    <select id="ms-month" onchange="loadMonthlySummary()"></select>
-  </div>
   <div class="panel">
     <div class="tbl-wrap"><table id="ms-table"></table></div>
   </div>
@@ -534,8 +535,6 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
   <div class="controls">
     <label>SDR</label>
     <select id="wk-emp" onchange="loadWorkings()"></select>
-    <label>Month</label>
-    <select id="wk-month" onchange="loadWorkings()"></select>
     <button class="btn" onclick="previewPDF()">Preview PDF</button>
   </div>
   <div class="kpi-grid" id="wk-kpis"></div>
@@ -557,8 +556,6 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
   <div class="page-title">Approve &amp; Send</div>
   <p class="page-sub">Review, approve and email commission statements</p>
   <div class="controls">
-    <label>Month</label>
-    <select id="as-month" onchange="loadApprovalStatus()"></select>
     <button class="btn primary" onclick="sendAllApproved()" id="as-send-btn">Send All Approved</button>
     <span id="as-counts" style="font-size:12px;color:var(--dim)"></span>
   </div>
@@ -614,16 +611,13 @@ async function init() {
   months = await mRes.json();
   employees = await eRes.json();
 
-  // Populate month selectors
-  ['to-month','ms-month','wk-month','as-month'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    months.slice().reverse().forEach(m => {
-      const opt = document.createElement('option');
-      opt.value = m;
-      opt.text  = fmtMonth(m);
-      el.appendChild(opt);
-    });
+  // Populate global month selector
+  const gmEl = document.getElementById('global-month');
+  months.slice().reverse().forEach(m => {
+    const opt = document.createElement('option');
+    opt.value = m;
+    opt.text  = fmtMonth(m);
+    gmEl.appendChild(opt);
   });
 
   // Populate SDR month for sd-month (with "All" option)
@@ -659,6 +653,16 @@ async function init() {
 }
 
 // ============================================================
+// Global month change — reload the active month-based tab
+// ============================================================
+function onGlobalMonthChange() {
+  if (activeTab === 'team-overview')   loadTeamOverview();
+  else if (activeTab === 'monthly-summary') loadMonthlySummary();
+  else if (activeTab === 'workings')   loadWorkings();
+  else if (activeTab === 'approve-send') loadApprovalStatus();
+}
+
+// ============================================================
 // Tab navigation
 // ============================================================
 function showTab(name) {
@@ -683,7 +687,7 @@ function showTab(name) {
 // Team Overview
 // ============================================================
 async function loadTeamOverview() {
-  const month = document.getElementById('to-month').value;
+  const month = document.getElementById('global-month').value;
   const res   = await fetch(`/api/team_overview?month=${month}`);
   const data  = await res.json();
   const {employees: emps, kpis} = data;
@@ -721,7 +725,7 @@ async function loadTeamOverview() {
 // Monthly Summary
 // ============================================================
 async function loadMonthlySummary() {
-  const month = document.getElementById('ms-month').value;
+  const month = document.getElementById('global-month').value;
   const res   = await fetch(`/api/monthly_summary?month=${month}`);
   const emps  = await res.json();
   const heads = ['Name','Region','Currency','Out SAOs','In SAOs','Attainment','Total Commission','Total (EUR)'];
@@ -831,7 +835,7 @@ async function loadSDRDetail() {
 // ============================================================
 async function loadWorkings() {
   const empId = document.getElementById('wk-emp').value;
-  const month = document.getElementById('wk-month').value;
+  const month = document.getElementById('global-month').value;
   if (!empId || !month) return;
   const res  = await fetch(`/api/commission_workings?employee_id=${empId}&month=${month}`);
   const data = await res.json();
@@ -969,7 +973,7 @@ function tableHtml(heads, rows) {
 let approvalData = [];
 
 async function loadApprovalStatus() {
-  const month = document.getElementById('as-month').value;
+  const month = document.getElementById('global-month').value;
   const res   = await fetch(`/api/approval_status?month=${month}`);
   approvalData = await res.json();
 
@@ -1010,21 +1014,21 @@ async function loadApprovalStatus() {
 }
 
 async function approveEmp(empId) {
-  const month = document.getElementById('as-month').value;
+  const month = document.getElementById('global-month').value;
   await fetch('/api/approve', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({employee_id:empId,month})});
   toast('Approved ✓');
   loadApprovalStatus();
 }
 
 async function unapproveEmp(empId) {
-  const month = document.getElementById('as-month').value;
+  const month = document.getElementById('global-month').value;
   await fetch('/api/unapprove', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({employee_id:empId,month})});
   toast('Reverted to pending');
   loadApprovalStatus();
 }
 
 async function sendAllApproved() {
-  const month = document.getElementById('as-month').value;
+  const month = document.getElementById('global-month').value;
   const btn   = document.getElementById('as-send-btn');
   btn.disabled = true;
   btn.textContent = 'Sending…';
@@ -1041,12 +1045,12 @@ async function sendAllApproved() {
 }
 
 function previewPDFFor(empId) {
-  const month = document.getElementById('as-month').value;
+  const month = document.getElementById('global-month').value;
   window.open(`/api/preview_pdf?employee_id=${empId}&month=${month}`, '_blank');
 }
 function previewPDF() {
   const empId = document.getElementById('wk-emp').value;
-  const month = document.getElementById('wk-month').value;
+  const month = document.getElementById('global-month').value;
   window.open(`/api/preview_pdf?employee_id=${empId}&month=${month}`, '_blank');
 }
 
