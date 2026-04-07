@@ -109,6 +109,48 @@ def send_statement(
         return {"success": False, "error": str(e)}
 
 
+def send_excel_report(
+    smtp_config: dict,
+    to_email: str,
+    subject: str,
+    body_text: str,
+    excel_bytes: bytes,
+    filename: str,
+) -> dict:
+    """Send an Excel report as an email attachment."""
+    from_email = smtp_config.get("user", "")
+    from_name  = smtp_config.get("from_name", "Normative Commissions")
+
+    if not from_email:
+        return {"success": False, "error": "SMTP not configured"}
+
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"]    = formataddr((from_name, from_email))
+    msg["To"]      = to_email
+
+    msg.attach(MIMEText(body_text, "plain"))
+
+    xlsx_mime = "vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    part = MIMEApplication(excel_bytes, _subtype=xlsx_mime)
+    part.add_header("Content-Disposition", "attachment", filename=filename)
+    msg.attach(part)
+
+    try:
+        host     = smtp_config.get("host", "smtp.gmail.com")
+        port     = int(smtp_config.get("port", 587))
+        user     = smtp_config.get("user", "")
+        password = smtp_config.get("password", "")
+        with smtplib.SMTP(host, port, timeout=30) as server:
+            server.ehlo(); server.starttls(); server.ehlo()
+            if user and password:
+                server.login(user, password)
+            server.sendmail(from_email, [to_email], msg.as_string())
+        return {"success": True}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def build_cc_list(employees_df, employee_id: str) -> list[str]:
     """Return CC emails: manager + all CFO + all sales_director roles."""
     cc = []

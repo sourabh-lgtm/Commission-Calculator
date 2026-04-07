@@ -20,11 +20,13 @@ from src.reports import (
     team_overview, sdr_detail, monthly_summary,
     quarterly_summary, commission_workings,
     employee_list, available_months,
+    payroll_summary, accrual_summary,
 )
 from src.approval_state import ApprovalState
 from src.helpers import clean_json
 from src.pdf_generator import generate_statement
-from src.email_sender import send_statement, build_cc_list
+from src.email_sender import send_statement, build_cc_list, send_excel_report
+from export_excel import export_payroll_workbook, export_accrual_workbook
 
 # ---------------------------------------------------------------------------
 # Global state
@@ -194,6 +196,38 @@ class Handler(BaseHTTPRequestHandler):
                 self._respond({"error": "Could not generate PDF"}, 500)
             return
 
+        if path == "/api/payroll_summary":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            self._respond(payroll_summary(MODEL, yr))
+            return
+
+        if path == "/api/accrual_summary":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            self._respond(accrual_summary(MODEL, yr))
+            return
+
+        if path == "/api/export_payroll":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            xls = export_payroll_workbook(MODEL, yr)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="Payroll_Summary_{yr}.xlsx"')
+            self.send_header("Content-Length", len(xls))
+            self.end_headers()
+            self.wfile.write(xls)
+            return
+
+        if path == "/api/export_accrual":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            xls = export_accrual_workbook(MODEL, yr)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            self.send_header("Content-Disposition", f'attachment; filename="Accrual_Summary_{yr}.xlsx"')
+            self.send_header("Content-Length", len(xls))
+            self.end_headers()
+            self.wfile.write(xls)
+            return
+
         self._respond({"error": "Not found"}, 404)
 
     def do_POST(self):
@@ -254,6 +288,38 @@ class Handler(BaseHTTPRequestHandler):
                     errors.append({"employee_id": emp_id, "error": result["error"]})
 
             self._respond({"sent": sent_count, "errors": errors})
+            return
+
+        if path == "/api/send_payroll":
+            yr       = int(body.get("year", pd.Timestamp.now().year))
+            to_email = body.get("email", "")
+            if not to_email:
+                self._respond({"error": "No recipient email provided"}, 400)
+                return
+            xls    = export_payroll_workbook(MODEL, yr)
+            result = send_excel_report(
+                SMTP_CONFIG, to_email,
+                f"Commission & Bonus Payroll Summary — FY{yr}",
+                f"Please find attached the commission & bonus payroll summary for FY{yr}.\n\nNormative — Commission & Incentive Team",
+                xls, f"Payroll_Summary_{yr}.xlsx",
+            )
+            self._respond(result)
+            return
+
+        if path == "/api/send_accrual":
+            yr       = int(body.get("year", pd.Timestamp.now().year))
+            to_email = body.get("email", "")
+            if not to_email:
+                self._respond({"error": "No recipient email provided"}, 400)
+                return
+            xls    = export_accrual_workbook(MODEL, yr)
+            result = send_excel_report(
+                SMTP_CONFIG, to_email,
+                f"Commission & Bonus Accrual Summary — FY{yr}",
+                f"Please find attached the commission & bonus accrual summary for FY{yr}.\n\nNormative — Commission & Incentive Team",
+                xls, f"Accrual_Summary_{yr}.xlsx",
+            )
+            self._respond(result)
             return
 
         self._respond({"error": "Not found"}, 404)
@@ -451,6 +517,8 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
     <div class="tab" onclick="showTab('spif')">SPIFs</div>
     <div class="nav-section">Actions</div>
     <div class="tab" onclick="showTab('approve-send')">Approve &amp; Send</div>
+    <div class="tab" onclick="showTab('payroll-summary')">Payroll Summary</div>
+    <div class="tab" onclick="showTab('accrual-summary')">Finance Accruals</div>
     <div class="tab" onclick="showTab('data-view')">Data</div>
   </div>
 </nav>
@@ -564,6 +632,34 @@ tr.clickable:hover{background:rgba(255,145,120,.1)}
   </div>
 </div>
 
+<!-- ============================================================ PAYROLL SUMMARY -->
+<div id="tab-payroll-summary" class="tab-content">
+  <div class="page-title">Payroll Summary</div>
+  <p class="page-sub">Monthly commission per employee — send to payroll for processing</p>
+  <div class="controls">
+    <label>Year</label>
+    <select id="ps-year" onchange="loadPayrollSummary()"></select>
+    <button class="btn" onclick="exportPayroll()">Export Excel</button>
+    <input type="email" class="search" id="ps-email" placeholder="payroll@company.com" style="width:220px;margin-bottom:0">
+    <button class="btn primary" onclick="sendPayroll()">Send to Payroll</button>
+  </div>
+  <div id="ps-body"></div>
+</div>
+
+<!-- ============================================================ FINANCE ACCRUALS -->
+<div id="tab-accrual-summary" class="tab-content">
+  <div class="page-title">Finance Accruals</div>
+  <p class="page-sub">Department-level commission accruals in EUR — send to finance</p>
+  <div class="controls">
+    <label>Year</label>
+    <select id="ac-year" onchange="loadAccrualSummary()"></select>
+    <button class="btn" onclick="exportAccrual()">Export Excel</button>
+    <input type="email" class="search" id="ac-email" placeholder="finance@company.com" style="width:220px;margin-bottom:0">
+    <button class="btn primary" onclick="sendAccrual()">Send to Finance</button>
+  </div>
+  <div id="ac-body"></div>
+</div>
+
 <!-- ============================================================ DATA VIEW -->
 <div id="tab-data-view" class="tab-content">
   <div class="page-title">Data</div>
@@ -639,14 +735,17 @@ async function init() {
     });
   });
 
-  // Year selector for quarterly
-  const yr = document.getElementById('qs-year');
+  // Year selectors (quarterly + payroll + accrual)
   const curYr = new Date().getFullYear();
-  [curYr-1, curYr, curYr+1].forEach(y => {
-    const opt = document.createElement('option');
-    opt.value = y; opt.text = y;
-    if (y === curYr) opt.selected = true;
-    yr.appendChild(opt);
+  ['qs-year','ps-year','ac-year'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    [curYr-1, curYr, curYr+1].forEach(y => {
+      const opt = document.createElement('option');
+      opt.value = y; opt.text = y;
+      if (y === curYr) opt.selected = true;
+      el.appendChild(opt);
+    });
   });
 
   await loadTeamOverview();
@@ -680,6 +779,8 @@ function showTab(name) {
   if (name === 'workings')         loadWorkings();
   if (name === 'spif')             loadSPIFs();
   if (name === 'approve-send')     loadApprovalStatus();
+  if (name === 'payroll-summary')  loadPayrollSummary();
+  if (name === 'accrual-summary')  loadAccrualSummary();
   if (name === 'data-view')        loadDataView();
 }
 
@@ -1052,6 +1153,144 @@ function previewPDF() {
   const empId = document.getElementById('wk-emp').value;
   const month = document.getElementById('global-month').value;
   window.open(`/api/preview_pdf?employee_id=${empId}&month=${month}`, '_blank');
+}
+
+// ============================================================
+// Payroll Summary
+// ============================================================
+async function loadPayrollSummary() {
+  const yr  = document.getElementById('ps-year').value;
+  const res = await fetch(`/api/payroll_summary?year=${yr}`);
+  const data = await res.json();
+  const {months, month_labels, regions} = data;
+  const el = document.getElementById('ps-body');
+
+  if (!regions || !regions.length) {
+    el.innerHTML = '<div class="panel" style="color:var(--dim)">No data for selected year.</div>';
+    return;
+  }
+
+  let html = '';
+  for (const rd of regions) {
+    const emps = rd.employees;
+    const qCols = ['Q1','Q2','Q3','Q4'];
+    const heads = ['Employee','Title','Currency', ...month_labels, ...qCols, 'Total'];
+    // Build totals
+    const totMonthly = Object.fromEntries(months.map(m => [m, 0]));
+    const totQ = {q1:0,q2:0,q3:0,q4:0}; let totTotal = 0;
+    const rowData = emps.map(e => {
+      months.forEach(m => totMonthly[m] += e.monthly[m]||0);
+      totQ.q1+=e.q1; totQ.q2+=e.q2; totQ.q3+=e.q3; totQ.q4+=e.q4; totTotal+=e.total;
+      return [
+        e.name, e.title, e.currency,
+        ...months.map(m => fmtAmt(e.monthly[m]||0, e.currency)),
+        fmtAmt(e.q1,e.currency), fmtAmt(e.q2,e.currency),
+        fmtAmt(e.q3,e.currency), fmtAmt(e.q4,e.currency),
+        `<strong>${fmtAmt(e.total,e.currency)}</strong>`
+      ];
+    });
+    // Totals row — mixed since regions can have one currency
+    const cur = emps.length ? emps[0].currency : 'EUR';
+    rowData.push([
+      '<strong>TOTAL</strong>', '', cur,
+      ...months.map(m => `<strong>${fmtAmt(totMonthly[m],cur)}</strong>`),
+      `<strong>${fmtAmt(totQ.q1,cur)}</strong>`, `<strong>${fmtAmt(totQ.q2,cur)}</strong>`,
+      `<strong>${fmtAmt(totQ.q3,cur)}</strong>`, `<strong>${fmtAmt(totQ.q4,cur)}</strong>`,
+      `<strong>${fmtAmt(totTotal,cur)}</strong>`
+    ]);
+
+    html += `<div class="panel" style="margin-bottom:20px">
+      <h3>${rd.region} — ${yr}</h3>
+      <div class="tbl-wrap">${tableHtml(heads, rowData)}</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function exportPayroll() {
+  const yr = document.getElementById('ps-year').value;
+  window.location.href = `/api/export_payroll?year=${yr}`;
+}
+
+async function sendPayroll() {
+  const yr    = document.getElementById('ps-year').value;
+  const email = document.getElementById('ps-email').value.trim();
+  if (!email) { toast('Enter a recipient email first'); return; }
+  const res  = await fetch('/api/send_payroll', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yr),email})});
+  const data = await res.json();
+  if (data.success) toast(`✓ Payroll summary sent to ${email}`);
+  else toast(`✗ Error: ${data.error}`);
+}
+
+// ============================================================
+// Finance Accruals
+// ============================================================
+async function loadAccrualSummary() {
+  const yr  = document.getElementById('ac-year').value;
+  const res = await fetch(`/api/accrual_summary?year=${yr}`);
+  const data = await res.json();
+  const {months, month_labels, regions} = data;
+  const el = document.getElementById('ac-body');
+
+  if (!regions || !regions.length) {
+    el.innerHTML = '<div class="panel" style="color:var(--dim)">No data for selected year.</div>';
+    return;
+  }
+
+  let html = '';
+  for (const rd of regions) {
+    const rows = rd.rows;
+    const qCols = ['Q1','Q2','Q3','Q4'];
+    const heads = ['Department','Type', ...month_labels, ...qCols, 'Total (EUR)'];
+    const totMonthly = Object.fromEntries(months.map(m => [m, 0]));
+    const totQ = {q1:0,q2:0,q3:0,q4:0}; let totTotal = 0;
+    const rowData = rows.map(r => {
+      const isNI = r.type.includes('NI');
+      if (!isNI) {
+        months.forEach(m => totMonthly[m] += r.monthly[m]||0);
+        totQ.q1+=r.q1; totQ.q2+=r.q2; totQ.q3+=r.q3; totQ.q4+=r.q4; totTotal+=r.total;
+      }
+      const style = isNI ? 'color:var(--dim);font-style:italic' : '';
+      const fmt = v => isNI
+        ? `<span style="${style}">${fmtAmt(v,'EUR')}</span>`
+        : fmtAmt(v,'EUR');
+      return [
+        `<span style="${style}">${r.department}</span>`,
+        `<span style="${style}">${r.type}</span>`,
+        ...months.map(m => fmt(r.monthly[m]||0)),
+        fmt(r.q1), fmt(r.q2), fmt(r.q3), fmt(r.q4),
+        isNI ? fmt(r.total) : `<strong>${fmtAmt(r.total,'EUR')}</strong>`
+      ];
+    });
+    rowData.push([
+      '<strong>TOTAL (Commission)</strong>', '',
+      ...months.map(m => `<strong>${fmtAmt(totMonthly[m],'EUR')}</strong>`),
+      `<strong>${fmtAmt(totQ.q1,'EUR')}</strong>`, `<strong>${fmtAmt(totQ.q2,'EUR')}</strong>`,
+      `<strong>${fmtAmt(totQ.q3,'EUR')}</strong>`, `<strong>${fmtAmt(totQ.q4,'EUR')}</strong>`,
+      `<strong>${fmtAmt(totTotal,'EUR')}</strong>`
+    ]);
+
+    html += `<div class="panel" style="margin-bottom:20px">
+      <h3>${rd.region} — FY${yr} (EUR)</h3>
+      <div class="tbl-wrap">${tableHtml(heads, rowData)}</div>
+    </div>`;
+  }
+  el.innerHTML = html;
+}
+
+function exportAccrual() {
+  const yr = document.getElementById('ac-year').value;
+  window.location.href = `/api/export_accrual?year=${yr}`;
+}
+
+async function sendAccrual() {
+  const yr    = document.getElementById('ac-year').value;
+  const email = document.getElementById('ac-email').value.trim();
+  if (!email) { toast('Enter a recipient email first'); return; }
+  const res  = await fetch('/api/send_accrual', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({year:parseInt(yr),email})});
+  const data = await res.json();
+  if (data.success) toast(`✓ Accrual summary sent to ${email}`);
+  else toast(`✗ Error: ${data.error}`);
 }
 
 // ============================================================

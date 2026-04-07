@@ -228,6 +228,224 @@ def _sheet_fx_rates(wb: Workbook, model):
     _auto_width(ws)
 
 
+# ---------------------------------------------------------------------------
+# Payroll workbook (one sheet per region, employee rows × month columns)
+# ---------------------------------------------------------------------------
+
+def export_payroll_workbook(model, year: int) -> bytes:
+    import io
+    from src.reports import payroll_summary
+    data = payroll_summary(model, year)
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    for rd in data["regions"]:
+        region       = rd["region"]
+        emps         = rd["employees"]
+        months       = data["months"]
+        month_labels = data["month_labels"]
+        region_short = "SE" if region == "Nordics" else region
+        ws = wb.create_sheet(f"{region_short} {year}")
+
+        # --- Row 1: title ---
+        n_cols = 4 + len(months) + 4 + 1
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+        tc = ws.cell(row=1, column=1, value=f"Commission & Bonus Payroll Summary — FY{year}")
+        tc.font      = Font(name="Calibri", bold=True, size=13)
+        tc.alignment = Alignment(vertical="center")
+        ws.row_dimensions[1].height = 24
+        ws.row_dimensions[2].height = 6
+
+        # --- Row 3: quarter bands ---
+        def _q(m_str): return (pd.Timestamp(m_str).month - 1) // 3 + 1
+        q_col = 5
+        for q in range(1, 5):
+            q_months = [m for m in months if _q(m) == q]
+            if q_months:
+                c = ws.cell(row=3, column=q_col, value=f"Q{q}")
+                c.font = Font(name="Calibri", bold=True, size=9, color=WHITE)
+                c.fill = PatternFill("solid", fgColor=HEADER_BG)
+                c.alignment = Alignment(horizontal="center")
+                if len(q_months) > 1:
+                    ws.merge_cells(start_row=3, start_column=q_col,
+                                   end_row=3, end_column=q_col + len(q_months) - 1)
+                q_col += len(q_months)
+        ws.row_dimensions[3].height = 14
+
+        # --- Row 4: column headers ---
+        heads = ["Employee ID", "Name", "Title", "Currency"] + month_labels + ["Q1", "Q2", "Q3", "Q4", "Total"]
+        for col, h in enumerate(heads, 1):
+            c = ws.cell(row=4, column=col, value=h)
+            c.font      = Font(name="Calibri", bold=True, color=WHITE, size=10)
+            c.fill      = PatternFill("solid", fgColor=HEADER_BG)
+            c.alignment = Alignment(horizontal="center" if col > 4 else "left", vertical="center")
+            c.border    = THIN_BORDER
+        ws.row_dimensions[4].height = 18
+
+        # --- Data rows ---
+        t_monthly = {m: 0.0 for m in months}
+        t_q = [0.0, 0.0, 0.0, 0.0]
+        t_total = 0.0
+
+        for i, emp in enumerate(emps):
+            r = 5 + i
+            alt = i % 2 == 0
+            vals = ([emp["employee_id"], emp["name"], emp["title"], emp["currency"]]
+                    + [emp["monthly"].get(m, 0) for m in months]
+                    + [emp["q1"], emp["q2"], emp["q3"], emp["q4"], emp["total"]])
+            for col, v in enumerate(vals, 1):
+                c = ws.cell(row=r, column=col, value=v)
+                c.font      = Font(name="Calibri", size=10)
+                c.alignment = Alignment(horizontal="right" if col > 4 else "left", vertical="center")
+                c.border    = THIN_BORDER
+                if alt:
+                    c.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
+                if col > 4 and isinstance(v, (int, float)):
+                    c.number_format = "#,##0.00"
+            for m in months:
+                t_monthly[m] += emp["monthly"].get(m, 0)
+            t_q[0] += emp["q1"]; t_q[1] += emp["q2"]
+            t_q[2] += emp["q3"]; t_q[3] += emp["q4"]
+            t_total += emp["total"]
+
+        # --- Totals row ---
+        tr = 5 + len(emps)
+        tvals = (["", "TOTAL", "", ""]
+                 + [round(t_monthly[m], 2) for m in months]
+                 + [round(x, 2) for x in t_q] + [round(t_total, 2)])
+        for col, v in enumerate(tvals, 1):
+            c = ws.cell(row=tr, column=col, value=v)
+            c.font      = Font(name="Calibri", bold=True, size=10)
+            c.fill      = PatternFill("solid", fgColor=TOTAL_BG)
+            c.alignment = Alignment(horizontal="right" if col > 4 else "left", vertical="center")
+            c.border    = THIN_BORDER
+            if col > 4 and isinstance(v, (int, float)):
+                c.number_format = "#,##0.00"
+
+        # Column widths
+        ws.column_dimensions["A"].width = 14
+        ws.column_dimensions["B"].width = 24
+        ws.column_dimensions["C"].width = 34
+        ws.column_dimensions["D"].width = 10
+        for ci in range(5, n_cols + 1):
+            ws.column_dimensions[get_column_letter(ci)].width = 11
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Accrual workbook (department rows × month columns, EUR, NI for UK)
+# ---------------------------------------------------------------------------
+
+def export_accrual_workbook(model, year: int) -> bytes:
+    import io
+    from src.reports import accrual_summary
+    data = accrual_summary(model, year)
+
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    for rd in data["regions"]:
+        region       = rd["region"]
+        rows         = rd["rows"]
+        months       = data["months"]
+        month_labels = data["month_labels"]
+        region_short = "SE" if region == "Nordics" else region
+        ws = wb.create_sheet(f"{region_short} FY{str(year)[2:]}")
+
+        n_cols = 2 + len(months) + 4 + 1
+
+        # --- Row 1: title ---
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=n_cols)
+        tc = ws.cell(row=1, column=1, value=f"Commission & Bonus Accrual Summary — FY{year}")
+        tc.font      = Font(name="Calibri", bold=True, size=13)
+        tc.alignment = Alignment(vertical="center")
+        ws.row_dimensions[1].height = 24
+        ws.row_dimensions[2].height = 6
+
+        # --- Row 3: quarter bands ---
+        def _q(m_str): return (pd.Timestamp(m_str).month - 1) // 3 + 1
+        q_col = 3
+        for q in range(1, 5):
+            q_months = [m for m in months if _q(m) == q]
+            if q_months:
+                c = ws.cell(row=3, column=q_col, value=f"Q{q}")
+                c.font = Font(name="Calibri", bold=True, size=9, color=WHITE)
+                c.fill = PatternFill("solid", fgColor=HEADER_BG)
+                c.alignment = Alignment(horizontal="center")
+                if len(q_months) > 1:
+                    ws.merge_cells(start_row=3, start_column=q_col,
+                                   end_row=3, end_column=q_col + len(q_months) - 1)
+                q_col += len(q_months)
+        ws.row_dimensions[3].height = 14
+
+        # --- Row 4: column headers ---
+        heads = ["Department", "Type"] + month_labels + ["Q1", "Q2", "Q3", "Q4", "Total (EUR)"]
+        for col, h in enumerate(heads, 1):
+            c = ws.cell(row=4, column=col, value=h)
+            c.font      = Font(name="Calibri", bold=True, color=WHITE, size=10)
+            c.fill      = PatternFill("solid", fgColor=HEADER_BG)
+            c.alignment = Alignment(horizontal="center" if col > 2 else "left", vertical="center")
+            c.border    = THIN_BORDER
+        ws.row_dimensions[4].height = 18
+
+        # --- Data rows ---
+        t_monthly = {m: 0.0 for m in months}
+        t_q = [0.0, 0.0, 0.0, 0.0]
+        t_total = 0.0
+
+        for i, row in enumerate(rows):
+            r    = 5 + i
+            alt  = i % 2 == 0
+            is_ni = "NI" in row["type"]
+            vals  = ([row["department"], row["type"]]
+                     + [row["monthly"].get(m, 0) for m in months]
+                     + [row["q1"], row["q2"], row["q3"], row["q4"], row["total"]])
+            for col, v in enumerate(vals, 1):
+                c = ws.cell(row=r, column=col, value=v)
+                c.font      = Font(name="Calibri", size=10,
+                                   italic=is_ni, color="777777" if is_ni else BLACK)
+                c.alignment = Alignment(horizontal="right" if col > 2 else "left", vertical="center")
+                c.border    = THIN_BORDER
+                if alt and not is_ni:
+                    c.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
+                if col > 2 and isinstance(v, (int, float)):
+                    c.number_format = "#,##0.00"
+            if not is_ni:
+                for m in months:
+                    t_monthly[m] += row["monthly"].get(m, 0)
+                t_q[0] += row["q1"]; t_q[1] += row["q2"]
+                t_q[2] += row["q3"]; t_q[3] += row["q4"]
+                t_total += row["total"]
+
+        # --- Totals row ---
+        tr = 5 + len(rows)
+        tvals = (["TOTAL (Commission)", ""]
+                 + [round(t_monthly[m], 2) for m in months]
+                 + [round(x, 2) for x in t_q] + [round(t_total, 2)])
+        for col, v in enumerate(tvals, 1):
+            c = ws.cell(row=tr, column=col, value=v)
+            c.font      = Font(name="Calibri", bold=True, size=10)
+            c.fill      = PatternFill("solid", fgColor=TOTAL_BG)
+            c.alignment = Alignment(horizontal="right" if col > 2 else "left", vertical="center")
+            c.border    = THIN_BORDER
+            if col > 2 and isinstance(v, (int, float)):
+                c.number_format = "#,##0.00"
+
+        # Column widths
+        ws.column_dimensions["A"].width = 36
+        ws.column_dimensions["B"].width = 22
+        for ci in range(3, n_cols + 1):
+            ws.column_dimensions[get_column_letter(ci)].width = 11
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 if __name__ == "__main__":
     from src.pipeline import run_pipeline
     m = run_pipeline("data")
