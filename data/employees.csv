@@ -1,0 +1,7 @@
+employee_id,name,title,role,region,country,currency,manager_id,email,plan_start_date,plan_end_date
+emp_001,Alexandra-Maria Matis,Sales Development Representative I,sdr,Nordics,Sweden,SEK,mgr_001,alexandra.matis@normative.io,2026-03-02,2026-12-31
+emp_002,James Carter,Sales Development Representative I,sdr,UK,United Kingdom,GBP,mgr_001,james.carter@normative.io,2026-01-01,2026-12-31
+emp_003,Sophie Dubois,Sales Development Representative II,sdr,Europe,France,EUR,mgr_001,sophie.dubois@normative.io,2026-01-01,2026-12-31
+mgr_001,Joakim Karlsson,SDR Team Lead,manager,Nordics,Sweden,SEK,,joakim.karlsson@normative.io,2026-01-01,2026-12-31
+cfo_001,Sarah Chen,Chief Financial Officer,cfo,UK,United Kingdom,GBP,,sarah.chen@normative.io,2026-01-01,2026-12-31
+sd_001,Michael Torres,VP Revenue,sales_director,UK,United Kingdom,GBP,,michael.torres@normative.io,2026-01-01,2026-12-31

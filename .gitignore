@@ -12,6 +12,9 @@ build/
 # Output files
 output/
 
+# Config with credentials
+config.ini
+
 # Data files (may contain sensitive commission data)
 # data/*.csv
 
