@@ -691,7 +691,7 @@ async function loadTeamOverview() {
   // KPI cards
   const kpiEl = document.getElementById('to-kpis');
   kpiEl.innerHTML = `
-    ${kpiCard('Total Commission', fmtAmt(kpis.total_commission,'mixed'), 'All currencies combined')}
+    ${kpiCard('Total Commission', fmtAmt(kpis.total_commission_eur,'EUR'), 'In EUR')}
     ${kpiCard('Total SAOs', kpis.total_saos, 'Outbound + Inbound')}
     ${kpiCard('Avg Attainment', kpis.avg_attainment + '%', 'vs monthly target (3 outbound SAOs)')}
     ${kpiCard('Active SDRs', kpis.num_sdrs, fmtMonth(month))}
@@ -699,19 +699,20 @@ async function loadTeamOverview() {
 
   // Charts
   const labels = emps.map(e => e.name.split(' ')[0]);
-  const comms  = emps.map(e => e.total_commission);
+  const comms  = emps.map(e => e.total_commission_eur);
   const saos   = emps.map(e => e.total_saos);
-  renderBar('to-chart-comm', labels, comms, 'Commission');
+  renderBar('to-chart-comm', labels, comms, 'Commission (EUR)');
   renderBar('to-chart-saos', labels, saos, 'SAOs', '#7c3aed');
 
   // Table
-  const heads = ['Name','Region','Out SAOs','In SAOs','Out CW','In CW','Accelerator','Total'];
+  const heads = ['Name','Region','Out SAOs','In SAOs','Out CW','In CW','Accelerator','Total','Total (EUR)'];
   const rows  = emps.map(e => [
     e.name, e.region,
     e.outbound_saos, e.inbound_saos,
     fmtAmt(e.outbound_cw_comm, e.currency), fmtAmt(e.inbound_cw_comm, e.currency),
     fmtAmt(e.accelerator_topup, e.currency),
-    `<strong>${fmtAmt(e.total_commission, e.currency)}</strong>`
+    `<strong>${fmtAmt(e.total_commission, e.currency)}</strong>`,
+    `<strong>${fmtAmt(e.total_commission_eur, 'EUR')}</strong>`
   ]);
   renderTable('to-table', heads, rows);
 }
@@ -723,12 +724,13 @@ async function loadMonthlySummary() {
   const month = document.getElementById('ms-month').value;
   const res   = await fetch(`/api/monthly_summary?month=${month}`);
   const emps  = await res.json();
-  const heads = ['Name','Region','Currency','Out SAOs','In SAOs','Attainment','Total Commission'];
+  const heads = ['Name','Region','Currency','Out SAOs','In SAOs','Attainment','Total Commission','Total (EUR)'];
   const rows  = emps.map(e => [
     e.name, e.region, e.currency,
     e.outbound_saos, e.inbound_saos,
     attainCell(e.attainment_pct),
-    `<strong>${fmtAmt(e.total_commission, e.currency)}</strong>`
+    `<strong>${fmtAmt(e.total_commission, e.currency)}</strong>`,
+    `<strong>${fmtAmt(e.total_commission_eur, 'EUR')}</strong>`
   ]);
   renderTable('ms-table', heads, rows);
 }
@@ -744,11 +746,11 @@ async function loadQuarterly() {
   const {employees: emps, accelerators: accels} = data;
 
   const kpiEl = document.getElementById('qs-kpis');
-  const totalQ = emps.reduce((s,e) => s + e.total_commission, 0);
+  const totalQ = emps.reduce((s,e) => s + e.total_commission_eur, 0);
   const accelQ = emps.reduce((s,e) => s + e.accelerator_topup, 0);
   const metCount = emps.filter(e => e.target_met).length;
   kpiEl.innerHTML = `
-    ${kpiCard('Q Commission', fmtAmt(totalQ,'mixed'), 'All currencies')}
+    ${kpiCard('Q Commission', fmtAmt(totalQ,'EUR'), 'In EUR')}
     ${kpiCard('Accelerator Earned', fmtAmt(accelQ,'mixed'), 'Total top-ups')}
     ${kpiCard('Target Met', metCount + ' / ' + emps.length, '≥ 9 SAOs in quarter')}
   `;

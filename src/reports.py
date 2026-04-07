@@ -15,8 +15,14 @@ def team_overview(model, month: pd.Timestamp) -> dict:
 
     df = model.commission_detail[model.commission_detail["month"] == month].copy()
 
+    # EUR conversion: total_commission is in local currency; fx_rate is EUR→local
+    if not df.empty:
+        df["total_commission_eur"] = df["total_commission"] / df["fx_rate"].clip(lower=1e-6)
+    else:
+        df["total_commission_eur"] = 0.0
+
     # Team-level KPIs
-    total_comm   = float(df["total_commission"].sum()) if not df.empty else 0
+    total_comm_eur = float(df["total_commission_eur"].sum()) if not df.empty else 0
     total_saos   = int(df["total_sao_count"].sum())   if not df.empty and "total_sao_count" in df.columns else 0
     avg_attain   = float(df["attainment_pct"].mean())  if not df.empty and "attainment_pct" in df.columns else 0
     num_sdrs     = int(df["employee_id"].nunique())
@@ -37,15 +43,16 @@ def team_overview(model, month: pd.Timestamp) -> dict:
             "inbound_cw_comm":  row.get("inbound_cw_comm", 0),
             "accelerator_topup": row.get("accelerator_topup", 0),
             "total_commission": row.get("total_commission", 0),
+            "total_commission_eur": round(float(row["total_commission_eur"]), 2),
         })
 
     return {
         "employees": employees,
         "kpis": {
-            "total_commission": round(total_comm, 2),
-            "total_saos":       total_saos,
-            "avg_attainment":   round(avg_attain, 1),
-            "num_sdrs":         num_sdrs,
+            "total_commission_eur": round(total_comm_eur, 2),
+            "total_saos":           total_saos,
+            "avg_attainment":       round(avg_attain, 1),
+            "num_sdrs":             num_sdrs,
         },
     }
 
@@ -119,20 +126,27 @@ def quarterly_summary(model, year: int, quarter: int) -> dict:
 
     df = model.commission_detail[model.commission_detail["month"].isin(months)].copy()
 
+    # EUR conversion per row before grouping
+    if not df.empty:
+        df["total_commission_eur"] = df["total_commission"] / df["fx_rate"].clip(lower=1e-6)
+    else:
+        df["total_commission_eur"] = 0.0
+
     emp_rows = []
     for emp_id, grp in df.groupby("employee_id"):
         emp_rows.append({
-            "employee_id":     emp_id,
-            "name":            grp["name"].iloc[0],
-            "region":          grp["region"].iloc[0],
-            "currency":        grp["currency"].iloc[0],
-            "outbound_saos":   int(grp["outbound_sao_count"].sum()) if "outbound_sao_count" in grp else 0,
-            "inbound_saos":    int(grp["inbound_sao_count"].sum())  if "inbound_sao_count" in grp else 0,
-            "total_saos":      int(grp["total_sao_count"].sum())    if "total_sao_count" in grp else 0,
-            "total_commission":round(float(grp["total_commission"].sum()), 2),
-            "accelerator_topup":round(float(grp["accelerator_topup"].sum()), 2),
-            "threshold":       9,
-            "target_met":      int(grp["total_sao_count"].sum()) >= 9 if "total_sao_count" in grp else False,
+            "employee_id":          emp_id,
+            "name":                 grp["name"].iloc[0],
+            "region":               grp["region"].iloc[0],
+            "currency":             grp["currency"].iloc[0],
+            "outbound_saos":        int(grp["outbound_sao_count"].sum()) if "outbound_sao_count" in grp else 0,
+            "inbound_saos":         int(grp["inbound_sao_count"].sum())  if "inbound_sao_count" in grp else 0,
+            "total_saos":           int(grp["total_sao_count"].sum())    if "total_sao_count" in grp else 0,
+            "total_commission":     round(float(grp["total_commission"].sum()), 2),
+            "total_commission_eur": round(float(grp["total_commission_eur"].sum()), 2),
+            "accelerator_topup":    round(float(grp["accelerator_topup"].sum()), 2),
+            "threshold":            9,
+            "target_met":           int(grp["total_sao_count"].sum()) >= 9 if "total_sao_count" in grp else False,
         })
 
     accel_rows = []
