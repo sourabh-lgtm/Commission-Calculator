@@ -388,6 +388,111 @@ def _load_csat_scores(data_dir: str, employees_df: pd.DataFrame | None) -> pd.Da
     return result
 
 
+def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Load service-credit utilisation from cs_credits_report.csv (raw CRM export).
+
+    Expected columns:
+      Contract Year End Date, Credits Allocated, Credits Used in Contract Year,
+      Account: CSA: Full Name
+
+    For each year-quarter, includes only rows whose Contract Year End Date falls
+    within that quarter.  Sums Credits Allocated and Credits Used per CSA, then:
+      credits_used_pct = used / allocated * 100
+    If allocated == 0 for a CSA in that quarter, treats as 100% (no credits at risk).
+
+    Returns DataFrame with: employee_id, year, quarter, credits_used_pct.
+    """
+    report_path = os.path.join(data_dir, "cs_credits_report.csv")
+
+    if not os.path.exists(report_path):
+        print("[Pipeline] CS: cs_credits_report.csv not found — skipping credits.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+
+    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+        try:
+            raw = pd.read_csv(report_path, encoding=enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        print("[Pipeline] CS: cannot decode cs_credits_report.csv — skipping.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+
+    raw.columns = raw.columns.str.strip()
+    required = {"Contract Year End Date", "Credits Allocated",
+                "Credits Used in Contract Year", "Account: CSA: Full Name"}
+    if not required.issubset(raw.columns):
+        missing = required - set(raw.columns)
+        print(f"[Pipeline] CS: cs_credits_report.csv missing columns {missing} — skipping.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+
+    raw["_end_date"]  = pd.to_datetime(raw["Contract Year End Date"], format="%d/%m/%Y", errors="coerce")
+    raw["_allocated"] = pd.to_numeric(raw["Credits Allocated"], errors="coerce").fillna(0)
+    raw["_used"]      = pd.to_numeric(raw["Credits Used in Contract Year"], errors="coerce").fillna(0)
+    raw["_csa"]       = raw["Account: CSA: Full Name"].astype(str).str.strip()
+    raw = raw.dropna(subset=["_end_date"])
+
+    raw["_year"]    = raw["_end_date"].dt.year
+    raw["_quarter"] = ((raw["_end_date"].dt.month - 1) // 3 + 1)
+
+    # ---- Build name → employee_id map (exact + last-name fallback) ----
+    if employees_df is None or employees_df.empty:
+        print("[Pipeline] CS: no employees_df for credits name matching.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+
+    cs_emps = employees_df[employees_df["role"] == "cs"][["employee_id", "name"]].copy()
+    cs_emps["_lower"] = cs_emps["name"].str.strip().str.lower()
+    cs_emps["_last"]  = cs_emps["_lower"].str.split().str[-1]
+
+    name_to_id: dict[str, str] = dict(zip(cs_emps["_lower"], cs_emps["employee_id"]))
+    last_counts = cs_emps["_last"].value_counts()
+    last_to_id: dict[str, str] = {
+        row["_last"]: row["employee_id"]
+        for _, row in cs_emps.iterrows()
+        if last_counts[row["_last"]] == 1
+    }
+
+    def _resolve(name: str) -> str | None:
+        lower = name.strip().lower()
+        if lower in name_to_id:
+            return name_to_id[lower]
+        last = lower.split()[-1] if lower else ""
+        return last_to_id.get(last)
+
+    raw["_employee_id"] = raw["_csa"].map(_resolve)
+
+    unmatched = raw[raw["_employee_id"].isna()]["_csa"].unique()
+    for u in unmatched:
+        print(f"[Pipeline] CS credits: '{u}' not matched to any employee — skipping rows.")
+
+    raw = raw.dropna(subset=["_employee_id"])
+
+    # ---- Aggregate per employee per year-quarter ----
+    agg = (
+        raw.groupby(["_employee_id", "_year", "_quarter"])
+           .agg(total_allocated=("_allocated", "sum"), total_used=("_used", "sum"))
+           .reset_index()
+    )
+
+    def _pct(row):
+        if row["total_allocated"] == 0:
+            return 100.0          # no credits committed → full payout
+        return round(row["total_used"] / row["total_allocated"] * 100, 4)
+
+    agg["credits_used_pct"] = agg.apply(_pct, axis=1)
+    result = agg.rename(columns={
+        "_employee_id": "employee_id",
+        "_year":        "year",
+        "_quarter":     "quarter",
+    })[["employee_id", "year", "quarter", "credits_used_pct"]]
+
+    for col in ("year", "quarter"):
+        result[col] = result[col].astype("Int64")
+
+    print(f"[Pipeline] CS: loaded credits from cs_credits_report.csv — {len(result)} employee-quarter rows.")
+    return result
+
+
 def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None) -> dict:
     """Load CS performance CSVs. Returns empty DataFrames for any missing file.
 
@@ -416,7 +521,7 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
     nrr, nrr_breakdown = compute_cs_nrr(data_dir, employees_df if employees_df is not None else pd.DataFrame())
     csat_sent   = _load_csat_sent(data_dir, employees_df)
     csat_scores = _load_csat_scores(data_dir, employees_df)
-    credits    = _read("cs_credits.csv")
+    credits    = _load_credits(data_dir, employees_df)
     referrals    = _read("cs_referrals.csv",    parse_dates=["date"])
     nrr_targets  = _read("cs_nrr_targets.csv")
 
@@ -425,7 +530,7 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         referrals["month"] = referrals["date"].dt.to_period("M").dt.to_timestamp()
 
     # Normalise year/quarter columns
-    for df in (nrr, credits):
+    for df in (nrr,):
         if not df.empty:
             for col in ("year", "quarter"):
                 if col in df.columns:

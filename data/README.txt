@@ -100,7 +100,21 @@ OPTION B (fallback): employees.csv
    - Date format: DD/MM/YYYY
    - Encoding: CP1252 (as exported by CRM)
 
-8. fx_rates.csv
+8. cs_credits_report.csv
+   Source: CRM credit-ledger report export (direct download, no reformatting needed)
+   Columns: Credit Ledger Name, Opportunity Product List, Contract Year Start Date,
+            Contract Year End Date, Credits Allocated, Credits Used in Contract Year,
+            Credit Provisioning Status, Credits Expiring in 90 Days,
+            Opportunity: Opportunity Name, Account: CSA: Full Name
+   - Account: CSA: Full Name: CSA full name (matched to employee via Humaans name, last-name fallback)
+   - Only rows whose Contract Year End Date falls within the commission quarter are included
+   - Credits Allocated and Credits Used are summed per CSA per quarter
+   - credits_used_pct = Credits Used / Credits Allocated × 100
+     (if Credits Allocated = 0 for a CSA, treated as 100% — no credits at risk)
+   - Date format: DD/MM/YYYY
+   - Encoding: CP1252 (as exported by CRM)
+
+9. fx_rates.csv
    Columns: month, EUR_SEK, EUR_GBP, EUR_USD
    - month: first day of the month, format YYYY-MM-DD
    - Rates used to convert ACV-based commissions from EUR to local currency
@@ -125,7 +139,7 @@ COMMISSION PAYOUT TIMING
 FILES AUTO-MANAGED
 ------------------
 
-9. approval_state.json
+10. approval_state.json
    - Tracks approval status for each employee-month (pending/approved/sent)
    - Do NOT edit manually — managed by the application
    - Safe to delete to reset all approval states
