@@ -101,7 +101,7 @@ _SHARED_TABS_HTML = """
 <!-- ============================================================ APPROVE & SEND (shared) -->
 <div id="tab-approve-send" class="tab-content">
   <div class="page-title">Approve &amp; Send</div>
-  <p class="page-sub">Review, approve and email commission statements</p>
+  <p class="page-sub">Review, approve and email commission &amp; bonus statements</p>
   <div class="controls">
     <button class="btn primary" onclick="sendAllApproved()" id="as-send-btn">Send All Approved</button>
     <span id="as-counts" style="font-size:12px;color:var(--dim)"></span>
@@ -415,7 +415,22 @@ async function loadApprovalStatus() {
   const sent     = displayData.filter(e => e.status === 'sent').length;
   document.getElementById('as-counts').textContent = approved + ' approved \u00b7 ' + sent + ' sent \u00b7 ' + pending + ' pending';
 
-  const heads = ['Name','Region','Currency','Total Commission','Status','Actions'];
+  const isCS     = globalRole() === 'cs';
+  const isQEnd   = isCS && ['03','06','09','12'].includes(month.slice(5,7));
+  const payLabel = isCS ? 'Total Payout' : 'Total Commission';
+
+  // Quarter-end note for CS
+  const noteEl = document.getElementById('as-qend-note');
+  if (noteEl) noteEl.remove();
+  if (isCS && !isQEnd) {
+    const note = document.createElement('p');
+    note.id = 'as-qend-note';
+    note.style.cssText = 'font-size:12px;color:var(--dim);margin-bottom:12px';
+    note.textContent = 'Non-quarter-end month \u2014 quarterly bonus (NRR / CSAT / Credits) will be \u20140. Only referral commissions are paid this month.';
+    document.querySelector('#tab-approve-send .panel').before(note);
+  }
+
+  const heads = ['Name','Region','Currency', payLabel,'Status','Actions'];
   const tbl   = document.getElementById('as-table');
   tbl.innerHTML = '';
   const thead = tbl.createTHead();
@@ -424,11 +439,14 @@ async function loadApprovalStatus() {
   const tbody = tbl.createTBody();
   displayData.forEach(e => {
     const tr = tbody.insertRow();
+    const payoutCell = isCS && !isQEnd && e.total_commission === 0
+      ? '<span style="color:var(--dim)">— (no bonus)</span>'
+      : '<strong>' + fmtAmt(e.total_commission, e.currency) + '</strong>';
     tr.innerHTML =
       '<td>' + e.name + '</td>' +
       '<td>' + e.region + '</td>' +
       '<td>' + e.currency + '</td>' +
-      '<td style="text-align:right"><strong>' + fmtAmt(e.total_commission, e.currency) + '</strong></td>' +
+      '<td style="text-align:right">' + payoutCell + '</td>' +
       '<td style="text-align:center"><span class="badge ' + e.status + '" id="badge-' + e.employee_id + '">' + e.status + '</span></td>' +
       '<td style="text-align:right">' +
         (e.status === 'pending'   ? `<button class="btn" onclick="approveEmp('${e.employee_id}')">Approve</button>` : '') +

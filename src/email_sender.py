@@ -35,23 +35,34 @@ def send_statement(
     sym = {"SEK": "kr", "GBP": "£", "EUR": "€"}.get(currency, "")
     total_fmt = f"{sym}{total_commission:,.2f}" if currency != "SEK" else f"{total_commission:,.2f} {sym}"
 
-    subject = f"Commission Statement — {to_name} — {month_label}"
+    is_cs = employee.get("role", "") == "cs"
+    stmt_label   = "Bonus Statement"      if is_cs else "Commission Statement"
+    payout_label = "Total Bonus"          if is_cs else "Total Commission"
+    workings_note = (
+        "The attached PDF contains a full breakdown of your quarterly bonus and referral workings for the period. "
+        "Quarterly bonus components (NRR, CSAT, Service Credits) are paid in quarter-end months only "
+        "(March, June, September, December)."
+        if is_cs else
+        "The attached PDF contains a full breakdown of your commission workings for the period."
+    )
+
+    subject = f"{stmt_label} — {to_name} — {month_label}"
 
     body_html = f"""
     <html><body style="font-family: Arial, sans-serif; color: #000;">
     <p>Hi {to_name.split()[0]},</p>
-    <p>Please find attached your commission statement for <strong>{month_label}</strong>.</p>
+    <p>Please find attached your {stmt_label.lower()} for <strong>{month_label}</strong>.</p>
     <table style="border-collapse:collapse; margin: 16px 0;">
       <tr>
         <td style="padding: 8px 16px 8px 0; color: #595959; font-size: 13px;">Period</td>
         <td style="padding: 8px 0; font-weight: bold;">{month_label}</td>
       </tr>
       <tr>
-        <td style="padding: 8px 16px 8px 0; color: #595959; font-size: 13px;">Total Commission</td>
+        <td style="padding: 8px 16px 8px 0; color: #595959; font-size: 13px;">{payout_label}</td>
         <td style="padding: 8px 0; font-weight: bold; font-size: 16px;">{total_fmt}</td>
       </tr>
     </table>
-    <p>The attached PDF contains a full breakdown of your commission workings for the period.
+    <p>{workings_note}
     If you have any questions, please contact your manager.</p>
     <p style="color: #595959; font-size: 12px; margin-top: 24px;">
       This statement is confidential and intended for the addressee only.<br>
@@ -62,9 +73,9 @@ def send_statement(
 
     body_text = (
         f"Hi {to_name.split()[0]},\n\n"
-        f"Please find attached your commission statement for {month_label}.\n\n"
-        f"Total Commission: {total_fmt}\n\n"
-        f"Please see the attached PDF for full workings.\n\n"
+        f"Please find attached your {stmt_label.lower()} for {month_label}.\n\n"
+        f"{payout_label}: {total_fmt}\n\n"
+        f"{workings_note}\n\n"
         f"Normative — Commission & Incentive Team"
     )
 
