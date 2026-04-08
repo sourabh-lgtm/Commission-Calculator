@@ -216,12 +216,14 @@ class CSACommissionPlan(BaseCommissionPlan):
                     (nrr_df["quarter"] == quarter)
                 ]
                 if not row.empty:
-                    nrr_pct = float(row["nrr_pct"].iloc[0])
-                    if nrr_pct > 100.0:
+                    nrr_pct    = float(row["nrr_pct"].iloc[0])
+                    nrr_target = self._get_nrr_target(emp_id, year, cs_performance)
+                    attainment = (nrr_pct / nrr_target) * 100.0
+                    if attainment > 100.0:
                         sal_monthly       = self._get_salary_monthly(emp_id, q_end, salary_history)
                         q_target          = sal_monthly * 12 * ANNUAL_BONUS_PCT / 4
                         nrr_portion       = q_target * MEASURE_WEIGHTS["nrr"]
-                        pct_above         = nrr_pct - 100.0
+                        pct_above         = attainment - 100.0
                         accelerator_topup = round(pct_above * NRR_ACCELERATOR_PER_PCT * nrr_portion, 2)
 
         return {
@@ -431,16 +433,33 @@ class CSACommissionPlan(BaseCommissionPlan):
         if row.empty:
             return 0.0, 0.0
         nrr_pct      = float(row["nrr_pct"].iloc[0])
-        payout_frac  = self._nrr_payout_fraction(nrr_pct)
+        nrr_target   = self._get_nrr_target(emp_id, year, cs_performance)
+        attainment   = (nrr_pct / nrr_target) * 100.0  # % of target
+        payout_frac  = self._nrr_payout_fraction(attainment)
         nrr_bonus    = round(q_target * MEASURE_WEIGHTS["nrr"] * payout_frac, 2)
         return nrr_pct, nrr_bonus
 
     @staticmethod
-    def _nrr_payout_fraction(nrr_pct: float) -> float:
+    def _get_nrr_target(emp_id: str, year: int, cs_performance: dict) -> float:
+        """Return the NRR target % for this employee/year. Defaults to 100.0."""
+        targets_df = cs_performance.get("nrr_targets", pd.DataFrame())
+        if targets_df.empty:
+            return 100.0
+        row = targets_df[
+            (targets_df["employee_id"].astype(str) == str(emp_id)) &
+            (targets_df["year"] == year)
+        ]
+        if row.empty or pd.isna(row["nrr_target_pct"].iloc[0]):
+            return 100.0
+        return float(row["nrr_target_pct"].iloc[0])
+
+    @staticmethod
+    def _nrr_payout_fraction(attainment_pct: float) -> float:
+        """Map attainment % of NRR target to a payout fraction."""
         for lo, hi, frac in NRR_TIERS:
-            if lo <= nrr_pct < hi:
+            if lo <= attainment_pct < hi:
                 return frac
-        if nrr_pct >= 101.0:
+        if attainment_pct >= 101.0:
             return 1.0   # accelerator handled separately
         return 0.0
 

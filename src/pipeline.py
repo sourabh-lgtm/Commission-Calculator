@@ -38,7 +38,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.sdr_activities = data["sdr_activities"]
     model.closed_won     = data["closed_won"]
     model.fx_rates       = data["fx_rates"]
-    model.cs_performance = _load_cs_performance(data_dir)
+    model.cs_performance = _load_cs_performance(data_dir, data.get("employees"))
 
     # ------------------------------------------------------------------
     # Stage 2: Build activity calendar (all months present in activity data)
@@ -217,8 +217,12 @@ def _discover_months(model: CommissionModel) -> list[pd.Timestamp]:
     return list(months)
 
 
-def _load_cs_performance(data_dir: str) -> dict:
-    """Load CS performance CSVs. Returns empty DataFrames for any missing file."""
+def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None) -> dict:
+    """Load CS performance CSVs. Returns empty DataFrames for any missing file.
+
+    NRR is computed dynamically from cs_book_of_business.csv + InputData.csv
+    when both files are present; otherwise falls back to the static cs_nrr.csv.
+    """
 
     def _read(filename: str, parse_dates=None) -> pd.DataFrame:
         path = os.path.join(data_dir, filename)
@@ -235,11 +239,21 @@ def _load_cs_performance(data_dir: str) -> dict:
             df["employee_id"] = df["employee_id"].astype(str).str.strip()
         return df
 
-    nrr        = _read("cs_nrr.csv")
+    # ---- NRR: compute dynamically if BoB file is present ----
+    bob_path = os.path.join(data_dir, "cs_book_of_business.csv")
+    if os.path.exists(bob_path) and employees_df is not None and not employees_df.empty:
+        from src.cs_nrr_loader import compute_cs_nrr
+        print("[Pipeline] CS: computing NRR from Book of Business + InputData...")
+        nrr = compute_cs_nrr(data_dir, employees_df)
+        if nrr.empty:
+            nrr = _read("cs_nrr.csv")
+    else:
+        nrr = _read("cs_nrr.csv")
     csat_sent  = _read("cs_csat_sent.csv")
     csat_scores = _read("cs_csat_scores.csv", parse_dates=["date"])
     credits    = _read("cs_credits.csv")
-    referrals  = _read("cs_referrals.csv", parse_dates=["date"])
+    referrals    = _read("cs_referrals.csv",    parse_dates=["date"])
+    nrr_targets  = _read("cs_nrr_targets.csv")
 
     # Add month column to referrals (first of the month from date)
     if not referrals.empty and "date" in referrals.columns:
@@ -252,8 +266,14 @@ def _load_cs_performance(data_dir: str) -> dict:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
+    # Normalise nrr_targets
+    if not nrr_targets.empty:
+        nrr_targets["year"]           = pd.to_numeric(nrr_targets["year"],           errors="coerce").astype("Int64")
+        nrr_targets["nrr_target_pct"] = pd.to_numeric(nrr_targets["nrr_target_pct"], errors="coerce")
+
     return {
         "nrr":         nrr,
+        "nrr_targets": nrr_targets,
         "csat_sent":   csat_sent,
         "csat_scores": csat_scores,
         "credits":     credits,
