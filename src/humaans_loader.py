@@ -28,9 +28,17 @@ _TITLE_RULES: list[tuple[str, str]] = [
     ("senior account manager", "am"),
     ("account manager",        "am"),
 
-    # CS variants
-    ("senior customer success", "cs"),
-    ("customer success",        "cs"),
+    # Climate Strategy variants (cs role — commissioned)
+    # Check longer/more-specific titles first to avoid false matches
+    ("lead climate strategy expert",       "cs"),
+    ("senior climate strategy advisor",    "cs"),
+    ("associate climate strategy advisor", "cs"),
+    ("climate strategy advisor",           "cs"),
+    ("climate strategy",                   "cs"),   # catch-all for future CS variants
+
+    # Customer Success (no commission plan — remapped to avoid conflict with cs)
+    ("senior customer success", "customer_success"),
+    ("customer success",        "customer_success"),
 
     # Solutions Engineer
     ("senior solutions engineer", "se"),

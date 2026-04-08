@@ -175,12 +175,22 @@ def commission_workings(model, employee_id: str, month: pd.Timestamp) -> dict:
         return {"rows": [], "summary": {}}
 
     plan = plan_cls()
-    rows = plan.get_workings_rows(
-        emp, month,
-        model.sdr_activities,
-        model.closed_won,
-        model.fx_rates,
-    )
+    cs_perf = getattr(model, "cs_performance", None)
+    if emp["role"] == "cs" and cs_perf:
+        rows = plan.get_workings_rows(
+            emp, month,
+            model.sdr_activities,
+            model.closed_won,
+            model.fx_rates,
+            cs_performance=cs_perf,
+        )
+    else:
+        rows = plan.get_workings_rows(
+            emp, month,
+            model.sdr_activities,
+            model.closed_won,
+            model.fx_rates,
+        )
 
     # Append SPIF rows for this employee + month
     if not model.spif_awards.empty:
@@ -232,10 +242,12 @@ def payroll_summary(model, year: int) -> dict:
 
     def _q(m): return (m.month - 1) // 3 + 1
 
-    sdrs = model.employees[model.employees["role"] == "sdr"].copy()
+    commissioned = model.employees[
+        model.employees["role"].isin(["sdr", "cs"])
+    ].copy()
     regions: dict[str, list] = {}
 
-    for _, emp in sdrs.iterrows():
+    for _, emp in commissioned.iterrows():
         emp_id = emp["employee_id"]
         region = emp["region"]
         edf    = df[df["employee_id"] == emp_id]
@@ -281,9 +293,10 @@ def accrual_summary(model, year: int) -> dict:
 
     def _q(m): return (m.month - 1) // 3 + 1
 
-    sdrs = model.employees[model.employees["role"] == "sdr"].copy()
     regions: dict[str, list] = {}
 
+    # ---- SDR employees: accrual = actual commission ----
+    sdrs = model.employees[model.employees["role"] == "sdr"].copy()
     for _, emp in sdrs.iterrows():
         emp_id   = emp["employee_id"]
         region   = emp["region"]
@@ -311,7 +324,6 @@ def accrual_summary(model, year: int) -> dict:
         }
         regions.setdefault(region, []).append({**base, "type": "Commission"})
 
-        # Employer NI for UK (13.8%) — in local currency (GBP)
         if region == "UK":
             ni_monthly = {k: round(v * 0.138, 2) for k, v in monthly.items()}
             ni_q       = {k: round(v * 0.138, 2) for k, v in q_totals.items()}
@@ -323,8 +335,64 @@ def accrual_summary(model, year: int) -> dict:
                 "q3": ni_q[3], "q4": ni_q[4],
                 "total":   round(total * 0.138, 2),
             })
+        if region == "Nordics":
+            sc_monthly = {k: round(v * 0.31, 2) for k, v in monthly.items()}
+            sc_q       = {k: round(v * 0.31, 2) for k, v in q_totals.items()}
+            regions[region].append({
+                **base,
+                "type":    "Employer Social Contributions (31%)",
+                "monthly": sc_monthly,
+                "q1": sc_q[1], "q2": sc_q[2],
+                "q3": sc_q[3], "q4": sc_q[4],
+                "total":   round(total * 0.31, 2),
+            })
 
-        # Employer Social Contributions for Nordics/Sweden (31%) — in local currency (SEK)
+    # ---- CS employees: accrual = full potential (salary × 15%), not actual bonus ----
+    cs_employees = model.employees[model.employees["role"] == "cs"].copy()
+    for _, emp in cs_employees.iterrows():
+        emp_id   = emp["employee_id"]
+        region   = emp["region"]
+        currency = emp["currency"]
+        sal_hist = model.salary_history[model.salary_history["employee_id"] == emp_id]
+
+        monthly = {}
+        for m in year_months:
+            eligible = (
+                sal_hist[sal_hist["effective_date"] <= m]
+                .sort_values("effective_date", ascending=False)
+            )
+            sal_monthly = float(eligible["salary_monthly"].iloc[0]) if not eligible.empty else 0.0
+            monthly[m.strftime("%Y-%m")] = round(sal_monthly * 0.15, 2)
+
+        q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+        for m in year_months:
+            q_totals[_q(m)] += monthly[m.strftime("%Y-%m")]
+        q_totals = {k: round(v, 2) for k, v in q_totals.items()}
+        total = round(sum(monthly.values()), 2)
+
+        base = {
+            "employee_id":      str(emp_id),
+            "name":             emp["name"],
+            "cost_center_code": emp.get("cost_center_code", ""),
+            "currency":         currency,
+            "monthly":          monthly,
+            "q1": q_totals[1], "q2": q_totals[2],
+            "q3": q_totals[3], "q4": q_totals[4],
+            "total":            total,
+        }
+        regions.setdefault(region, []).append({**base, "type": "CS Bonus Accrual (full potential)"})
+
+        if region == "UK":
+            ni_monthly = {k: round(v * 0.138, 2) for k, v in monthly.items()}
+            ni_q       = {k: round(v * 0.138, 2) for k, v in q_totals.items()}
+            regions[region].append({
+                **base,
+                "type":    "Employer NI (13.8%)",
+                "monthly": ni_monthly,
+                "q1": ni_q[1], "q2": ni_q[2],
+                "q3": ni_q[3], "q4": ni_q[4],
+                "total":   round(total * 0.138, 2),
+            })
         if region == "Nordics":
             sc_monthly = {k: round(v * 0.31, 2) for k, v in monthly.items()}
             sc_q       = {k: round(v * 0.31, 2) for k, v in q_totals.items()}
@@ -349,8 +417,10 @@ def accrual_summary(model, year: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def employee_list(model) -> list[dict]:
-    sdrs = model.employees[model.employees["role"] == "sdr"].copy()
-    return df_to_records(sdrs[["employee_id", "name", "title", "region", "currency"]])
+    commissioned = model.employees[
+        model.employees["role"].isin(["sdr", "cs"])
+    ].copy()
+    return df_to_records(commissioned[["employee_id", "name", "title", "region", "currency"]])
 
 
 # ---------------------------------------------------------------------------

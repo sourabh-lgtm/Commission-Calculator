@@ -180,16 +180,20 @@ def _sheet_commission_workings(wb: Workbook, model):
     ws.append(heads)
     _header_style(ws, 1, len(heads))
 
-    sdrs = model.employees[model.employees["role"] == "sdr"]
+    commissioned = model.employees[model.employees["role"].isin(["sdr", "cs"])]
+    cs_perf = getattr(model, "cs_performance", None)
     row_idx = 2
 
-    for _, emp in sdrs.iterrows():
+    for _, emp in commissioned.iterrows():
         plan_cls = get_plan(emp["role"])
         if not plan_cls:
             continue
         plan = plan_cls()
         for month in model.active_months:
-            rows = plan.get_workings_rows(emp, month, model.sdr_activities, model.closed_won, model.fx_rates)
+            if emp["role"] == "cs" and cs_perf:
+                rows = plan.get_workings_rows(emp, month, model.sdr_activities, model.closed_won, model.fx_rates, cs_performance=cs_perf)
+            else:
+                rows = plan.get_workings_rows(emp, month, model.sdr_activities, model.closed_won, model.fx_rates)
             for r in rows:
                 ws.append([
                     emp["name"],

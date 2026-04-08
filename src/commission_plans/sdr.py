@@ -52,6 +52,7 @@ class SDRCommissionPlan(BaseCommissionPlan):
         closed_won: pd.DataFrame,
         fx_df: pd.DataFrame,
         salary_history: pd.DataFrame = None,   # unused for SDRs
+        cs_performance: dict = None,            # unused for SDRs
     ) -> dict:
         emp_id   = employee["employee_id"]
         currency = employee["currency"]
@@ -134,6 +135,7 @@ class SDRCommissionPlan(BaseCommissionPlan):
         quarter: int,
         activities: pd.DataFrame,
         salary_history: pd.DataFrame = None,   # unused for SDRs
+        cs_performance: dict = None,            # unused for SDRs
     ) -> dict:
         emp_id   = employee["employee_id"]
         currency = employee["currency"]

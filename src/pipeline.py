@@ -1,5 +1,6 @@
 """5-stage data pipeline for the Commission Calculator."""
 
+import os
 import pandas as pd
 from src.loader import load_all
 from src.helpers import quarter_months, quarter_end_month, month_to_quarter
@@ -19,6 +20,9 @@ class CommissionModel:
         self.spif_awards: pd.DataFrame = pd.DataFrame()
         self.active_months: list[pd.Timestamp] = []
         self.default_month: pd.Timestamp | None = None
+        # CS-specific performance inputs
+        # Keys: "nrr", "csat_sent", "csat_scores", "credits", "referrals"
+        self.cs_performance: dict = {}
 
 
 def run_pipeline(data_dir: str) -> CommissionModel:
@@ -34,6 +38,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.sdr_activities = data["sdr_activities"]
     model.closed_won     = data["closed_won"]
     model.fx_rates       = data["fx_rates"]
+    model.cs_performance = _load_cs_performance(data_dir)
 
     # ------------------------------------------------------------------
     # Stage 2: Build activity calendar (all months present in activity data)
@@ -69,6 +74,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
                 model.closed_won,
                 model.fx_rates,
                 model.salary_history,
+                cs_performance=model.cs_performance,
             )
             monthly_rows.append(row)
 
@@ -89,6 +95,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
                 emp, year, quarter,
                 model.sdr_activities,
                 model.salary_history,
+                cs_performance=model.cs_performance,
             )
             if row.get("accelerator_topup", 0) > 0:
                 accel_rows.append(row)
@@ -203,7 +210,55 @@ def _discover_months(model: CommissionModel) -> list[pd.Timestamp]:
         months.update(model.sdr_activities["month"].dropna().unique())
     if not model.closed_won.empty and "month" in model.closed_won.columns:
         months.update(model.closed_won["month"].dropna().unique())
+    # Include months from CS referral dates so CS employees appear even if no SDR data
+    ref_df = model.cs_performance.get("referrals", pd.DataFrame())
+    if not ref_df.empty and "month" in ref_df.columns:
+        months.update(ref_df["month"].dropna().unique())
     return list(months)
+
+
+def _load_cs_performance(data_dir: str) -> dict:
+    """Load CS performance CSVs. Returns empty DataFrames for any missing file."""
+
+    def _read(filename: str, parse_dates=None) -> pd.DataFrame:
+        path = os.path.join(data_dir, filename)
+        if not os.path.exists(path):
+            print(f"[Pipeline] CS: {filename} not found — skipping.")
+            return pd.DataFrame()
+        df = pd.read_csv(path)
+        df.columns = df.columns.str.strip()
+        if parse_dates:
+            for col in parse_dates:
+                if col in df.columns:
+                    df[col] = pd.to_datetime(df[col], errors="coerce")
+        if "employee_id" in df.columns:
+            df["employee_id"] = df["employee_id"].astype(str).str.strip()
+        return df
+
+    nrr        = _read("cs_nrr.csv")
+    csat_sent  = _read("cs_csat_sent.csv")
+    csat_scores = _read("cs_csat_scores.csv", parse_dates=["date"])
+    credits    = _read("cs_credits.csv")
+    referrals  = _read("cs_referrals.csv", parse_dates=["date"])
+
+    # Add month column to referrals (first of the month from date)
+    if not referrals.empty and "date" in referrals.columns:
+        referrals["month"] = referrals["date"].dt.to_period("M").dt.to_timestamp()
+
+    # Normalise year/quarter columns
+    for df in (nrr, csat_sent, credits):
+        if not df.empty:
+            for col in ("year", "quarter"):
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+    return {
+        "nrr":         nrr,
+        "csat_sent":   csat_sent,
+        "csat_scores": csat_scores,
+        "credits":     credits,
+        "referrals":   referrals,
+    }
 
 
 def _discover_year_quarters(months: list[pd.Timestamp]) -> list[tuple[int, int]]:
