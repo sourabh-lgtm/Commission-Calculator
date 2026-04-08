@@ -52,10 +52,18 @@ def compute_cs_nrr(
     employees_df: pd.DataFrame,
     year: int | None = None,
     quarter: int | None = None,
-) -> pd.DataFrame:
-    """Return a DataFrame with columns: employee_id, year, quarter, nrr_pct.
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Return (nrr_df, breakdown_df).
+
+    nrr_df columns     : employee_id, year, quarter, nrr_pct
+    breakdown_df columns: employee_id, year, quarter, account_id, account_name,
+                          base_arr, add_on, upsell_downsell, churn
 
     Computes NRR for each CSA found in cs_book_of_business.csv.
+    breakdown_df contains one row per account that had InputData activity in the
+    period; accounts with no transactions are omitted (they contribute only to the
+    base-ARR denominator).
+
     If year/quarter are None, computes all year-quarter combinations
     found in InputData's Close Date for 2026.
 
@@ -69,24 +77,32 @@ def compute_cs_nrr(
     bob_path   = os.path.join(data_dir, "cs_book_of_business.csv")
     input_path = os.path.join(data_dir, "InputData.csv")
 
+    _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
+    _empty_bkd = pd.DataFrame(columns=[
+        "employee_id", "year", "quarter", "account_id", "account_name",
+        "base_arr", "add_on", "upsell_downsell", "churn",
+    ])
+
     if not os.path.exists(bob_path):
         print("[NRR] cs_book_of_business.csv not found — skipping NRR computation.")
-        return pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
+        return _empty_nrr, _empty_bkd
 
     if not os.path.exists(input_path):
         print("[NRR] InputData.csv not found — skipping NRR computation.")
-        return pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
+        return _empty_nrr, _empty_bkd
 
     # ---- Load Book of Business ----
     bob = _read_csv(bob_path)
 
     # Required columns by index
-    arr_col = bob.columns[9]   # Flat Renewal ACV (converted)
-    id_col  = bob.columns[11]  # Account ID
-    csa_col = bob.columns[19]  # CSA 2026
+    arr_col  = bob.columns[9]   # Flat Renewal ACV (converted)
+    id_col   = bob.columns[11]  # Account ID
+    csa_col  = bob.columns[19]  # CSA 2026
+    name_col = bob.columns[5]   # Account Name
 
     bob["_account_id_15"] = bob[id_col].astype(str).str.strip().str[:15]
     bob["_csa_name"]      = bob[csa_col].astype(str).str.strip()
+    bob["_account_name"]  = bob[name_col].astype(str).str.strip()
     # Remove thousand-separator commas before numeric conversion
     bob["_arr"]           = pd.to_numeric(
         bob[arr_col].astype(str).str.replace(",", "", regex=False),
@@ -166,7 +182,15 @@ def compute_cs_nrr(
         return pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
 
     # ---- Compute NRR per CSA per year-quarter ----
-    results: list[dict] = []
+    results:   list[dict] = []
+    breakdown: list[dict] = []
+
+    # Build a lookup: account_id_15 → account_name (from BoB)
+    acct_name_map: dict[str, str] = (
+        bob.drop_duplicates(subset=["_account_id_15"])
+           .set_index("_account_id_15")["_account_name"]
+           .to_dict()
+    )
 
     for csa_name, grp in bob.groupby("_csa_name"):
         emp_id = _resolve_name(csa_name)
@@ -179,8 +203,11 @@ def compute_cs_nrr(
             print(f"[NRR] Warning: {csa_name} has total ARR = {total_arr:.0f} — skipping.")
             continue
 
-        # Account IDs for this CSA (15-char)
-        csa_account_ids = set(grp["_account_id_15"].tolist())
+        # Account IDs for this CSA (15-char), with per-account base ARR
+        acct_arr: dict[str, float] = (
+            grp.groupby("_account_id_15")["_arr"].sum().to_dict()
+        )
+        csa_account_ids = set(acct_arr.keys())
 
         # Filter InputData to this CSA's accounts
         inp_csa = inp_dedup[inp_dedup["_account_id_15"].isin(csa_account_ids)].copy()
@@ -219,10 +246,37 @@ def compute_cs_nrr(
                 "nrr_pct":     nrr_pct,
             })
 
-    if not results:
-        return pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
+            # ---- Per-account breakdown (accounts with activity only) ----
+            for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
+                acct_q = inp_q[inp_q["_account_id_15"] == acct_id]
+                acct_addon  = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
+                acct_upsell = acct_q[
+                    (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
+                ]["_attainment"].sum()
+                acct_churn  = acct_q[
+                    (acct_q["_type"] == "Renewal") & (acct_q["_stage"] == "Closed Lost")
+                ]["_attainment"].sum()
 
-    return pd.DataFrame(results)
+                # Only include accounts that had some activity this period
+                if acct_addon == 0 and acct_upsell == 0 and acct_churn == 0:
+                    continue
+
+                breakdown.append({
+                    "employee_id":    emp_id,
+                    "year":           yr,
+                    "quarter":        qt,
+                    "account_id":     acct_id,
+                    "account_name":   acct_name_map.get(acct_id, acct_id),
+                    "base_arr":       base_arr,
+                    "add_on":         acct_addon,
+                    "upsell_downsell": acct_upsell,
+                    "churn":          acct_churn,
+                })
+
+    if not results:
+        return _empty_nrr, _empty_bkd
+
+    return pd.DataFrame(results), pd.DataFrame(breakdown) if breakdown else _empty_bkd
 
 
 # ---------------------------------------------------------------------------

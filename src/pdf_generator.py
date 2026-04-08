@@ -543,22 +543,28 @@ def _cs_workings_page(employee, period_label, rows, summary, currency):
     header = ["Date", "Component", "Account / Period", "Rate / Tier", f"Amount ({currency})"]
     data = [header]
 
-    _cell_style = ParagraphStyle("cs_wk_cell", fontName="Helvetica", fontSize=9, leading=11)
+    _cell_style  = ParagraphStyle("cs_wk_cell",  fontName="Helvetica",      fontSize=9, leading=11)
     _bonus_style = ParagraphStyle("cs_wk_bonus", fontName="Helvetica-Bold", fontSize=9, leading=11, textColor=CORAL)
-    _fcst_style  = ParagraphStyle("cs_wk_fcst",  fontName="Helvetica", fontSize=9, leading=11, textColor=DIM)
+    _fcst_style  = ParagraphStyle("cs_wk_fcst",  fontName="Helvetica",      fontSize=9, leading=11, textColor=DIM)
+    _acct_style  = ParagraphStyle("cs_wk_acct",  fontName="Helvetica",      fontSize=8, leading=10, textColor=DIM)
+    _acct_b_style = ParagraphStyle("cs_wk_acctb", fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=DIM)
 
     total = 0.0
     bonus_row_indices = []
+    acct_row_indices  = []
 
     for i, r in enumerate(rows, start=1):
-        row_type = r.get("type", "")
-        is_bonus = row_type in _bonus_amts
+        row_type    = r.get("type", "")
+        is_bonus    = row_type in _bonus_amts
         is_forecast = bool(r.get("is_forecast", False))
+        is_acct     = row_type == "CS NRR Account"
 
         comm = _bonus_amts.get(row_type) if is_bonus else (float(r.get("commission") or 0))
-        total += 0.0 if is_forecast else comm
+        # Account sub-rows show net impact but don't add to commission total
+        if not is_acct:
+            total += 0.0 if is_forecast else comm
 
-        account = r.get("opportunity_name") or r.get("opportunity_id", "")
+        account   = r.get("opportunity_name") or r.get("opportunity_id", "")
         rate_desc = r.get("rate_desc", "") or ""
 
         # Surface ACV and FX inline for closed-won referral rows
@@ -566,24 +572,45 @@ def _cs_workings_page(employee, period_label, rows, summary, currency):
             rate_desc = (f"ACV {_sym('EUR')}{_num(r['acv_eur'])} EUR "
                          f"\u00d7 {float(r['fx_rate']):.4f} \u2192 {rate_desc}")
 
-        if is_bonus:
+        if is_acct:
+            comm_str = f"{comm:+,.0f}" if comm else "—"
+            data.append([
+                "",
+                Paragraph("  ↳", _acct_style),
+                Paragraph(str(account), _acct_b_style),
+                Paragraph(rate_desc, _acct_style),
+                comm_str,
+            ])
+            acct_row_indices.append(i)
+        elif is_bonus:
             comm_str = f"{sym}{comm:,.2f}" if comm else "—"
+            cell_s = _bonus_style
+            data.append([
+                r.get("date", ""),
+                Paragraph(row_type, cell_s),
+                Paragraph(str(account), _cell_style),
+                Paragraph(rate_desc, _cell_style),
+                comm_str,
+            ])
+            bonus_row_indices.append(i)
         elif is_forecast:
             comm_str = f"{sym}{comm:,.2f} (forecast)"
+            data.append([
+                r.get("date", ""),
+                Paragraph(row_type, _fcst_style),
+                Paragraph(str(account), _cell_style),
+                Paragraph(rate_desc, _cell_style),
+                comm_str,
+            ])
         else:
             comm_str = f"{sym}{comm:,.2f}"
-
-        cell_s = _bonus_style if is_bonus else (_fcst_style if is_forecast else _cell_style)
-        data.append([
-            r.get("date", ""),
-            Paragraph(row_type, cell_s),
-            Paragraph(str(account), _cell_style),
-            Paragraph(rate_desc, _cell_style),
-            comm_str,
-        ])
-
-        if is_bonus:
-            bonus_row_indices.append(i)
+            data.append([
+                r.get("date", ""),
+                Paragraph(row_type, _cell_style),
+                Paragraph(str(account), _cell_style),
+                Paragraph(rate_desc, _cell_style),
+                comm_str,
+            ])
 
     data.append(["", "", "", "TOTAL", f"{sym}{total:,.2f}"])
     total_row_idx = len(data) - 1
@@ -610,6 +637,14 @@ def _cs_workings_page(employee, period_label, rows, summary, currency):
     # Highlight quarterly bonus rows in coral
     for idx in bonus_row_indices:
         style_cmds += [("BACKGROUND", (0, idx), (-1, idx), colors.HexColor("#FFF3F0"))]
+    # Account sub-rows: subtle indented background
+    for idx in acct_row_indices:
+        style_cmds += [
+            ("BACKGROUND",  (0, idx), (-1, idx), colors.HexColor("#F7F7F7")),
+            ("FONT",        (0, idx), (-1, idx), "Helvetica", 8),
+            ("TEXTCOLOR",   (0, idx), (-1, idx), DIM),
+            ("LEFTPADDING", (1, idx), (1, idx),  14),
+        ]
 
     tbl.setStyle(TableStyle(style_cmds))
     elements.append(tbl)

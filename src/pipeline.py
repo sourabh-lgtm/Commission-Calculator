@@ -217,11 +217,182 @@ def _discover_months(model: CommissionModel) -> list[pd.Timestamp]:
     return list(months)
 
 
+def _load_csat_sent(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Load CSAT-sent counts from cs_csat_report.csv (raw CRM survey-sent export).
+
+    Expected columns: Subject, First Name, Last Name, Date, Assigned, Account Name
+    Returns DataFrame with: employee_id, year, quarter, csats_sent (Int64).
+    Multiple rows per account in the same quarter are counted individually.
+    """
+    report_path = os.path.join(data_dir, "cs_csat_report.csv")
+
+    if not os.path.exists(report_path):
+        print("[Pipeline] CS: cs_csat_report.csv not found — skipping CSAT sent.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "csats_sent"])
+
+    # ---- Load the raw report ----
+    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+        try:
+            raw = pd.read_csv(report_path, encoding=enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        print("[Pipeline] CS: cannot decode cs_csat_report.csv — skipping.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "csats_sent"])
+
+    raw.columns = raw.columns.str.strip()
+    required = {"Date", "Assigned"}
+    if not required.issubset(raw.columns):
+        print(f"[Pipeline] CS: cs_csat_report.csv missing columns {required - set(raw.columns)} — skipping.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "csats_sent"])
+
+    raw["_date"]    = pd.to_datetime(raw["Date"], format="%d/%m/%Y", errors="coerce")
+    raw["_assigned"] = raw["Assigned"].astype(str).str.strip()
+    raw = raw.dropna(subset=["_date"])
+
+    # ---- Build name → employee_id map (exact + last-name fallback) ----
+    if employees_df is None or employees_df.empty:
+        print("[Pipeline] CS: no employees_df for CSAT report name matching.")
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "csats_sent"])
+
+    cs_emps = employees_df[employees_df["role"] == "cs"][["employee_id", "name"]].copy()
+    cs_emps["_lower"]     = cs_emps["name"].str.strip().str.lower()
+    cs_emps["_last"]      = cs_emps["_lower"].str.split().str[-1]
+
+    name_to_id: dict[str, str] = dict(zip(cs_emps["_lower"], cs_emps["employee_id"]))
+    last_counts = cs_emps["_last"].value_counts()
+    last_to_id: dict[str, str] = {
+        row["_last"]: row["employee_id"]
+        for _, row in cs_emps.iterrows()
+        if last_counts[row["_last"]] == 1
+    }
+
+    def _resolve(name: str) -> str | None:
+        lower = name.strip().lower()
+        if lower in name_to_id:
+            return name_to_id[lower]
+        last = lower.split()[-1] if lower else ""
+        return last_to_id.get(last)
+
+    raw["_employee_id"] = raw["_assigned"].map(_resolve)
+
+    unmatched = raw[raw["_employee_id"].isna()]["_assigned"].unique()
+    for u in unmatched:
+        print(f"[Pipeline] CS CSAT: '{u}' not matched to any employee — skipping rows.")
+
+    raw = raw.dropna(subset=["_employee_id"])
+    raw["_year"]    = raw["_date"].dt.year
+    raw["_quarter"] = ((raw["_date"].dt.month - 1) // 3 + 1)
+
+    # YTD cumulative: count all sends from Jan 1 through end of each quarter
+    # so Q2 includes Q1 sends too (same convention as NRR).
+    # Each row = one CSAT sent; multiple per account are valid.
+    agg = (
+        raw.groupby(["_employee_id", "_year", "_quarter"])
+           .size()
+           .reset_index(name="csats_sent")
+           .rename(columns={"_employee_id": "employee_id", "_year": "year", "_quarter": "quarter"})
+    )
+
+    # Compute cumulative YTD counts per employee per year
+    rows = []
+    for (emp_id, yr), grp in agg.groupby(["employee_id", "year"]):
+        grp = grp.sort_values("quarter")
+        cumulative = 0
+        for _, r in grp.iterrows():
+            cumulative += int(r["csats_sent"])
+            rows.append({"employee_id": emp_id, "year": int(yr), "quarter": int(r["quarter"]), "csats_sent": cumulative})
+
+    if not rows:
+        return pd.DataFrame(columns=["employee_id", "year", "quarter", "csats_sent"])
+
+    result = pd.DataFrame(rows)
+    for col in ("year", "quarter", "csats_sent"):
+        result[col] = result[col].astype("Int64")
+
+    print(f"[Pipeline] CS: loaded CSAT sent from cs_csat_report.csv — {len(result)} employee-quarter rows.")
+    return result
+
+
+def _load_csat_scores(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFrame:
+    """Load CSAT scores from cs_csat_scores_report.csv (raw CRM survey-response export).
+
+    Expected columns: CSA, Account, Survey Response: Created Date, Score
+    Returns DataFrame with: employee_id, date (datetime), score (float).
+    """
+    report_path = os.path.join(data_dir, "cs_csat_scores_report.csv")
+
+    if not os.path.exists(report_path):
+        print("[Pipeline] CS: cs_csat_scores_report.csv not found — skipping CSAT scores.")
+        return pd.DataFrame(columns=["employee_id", "date", "score"])
+
+    for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+        try:
+            raw = pd.read_csv(report_path, encoding=enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        print("[Pipeline] CS: cannot decode cs_csat_scores_report.csv — skipping.")
+        return pd.DataFrame(columns=["employee_id", "date", "score"])
+
+    raw.columns = raw.columns.str.strip()
+    date_col = "Survey Response: Created Date"
+    required = {"CSA", date_col, "Score"}
+    if not required.issubset(raw.columns):
+        print(f"[Pipeline] CS: cs_csat_scores_report.csv missing columns {required - set(raw.columns)} — skipping.")
+        return pd.DataFrame(columns=["employee_id", "date", "score"])
+
+    raw["_date"]  = pd.to_datetime(raw[date_col], format="%d/%m/%Y", errors="coerce")
+    raw["_score"] = pd.to_numeric(raw["Score"], errors="coerce")
+    raw["_csa"]   = raw["CSA"].astype(str).str.strip()
+    raw = raw.dropna(subset=["_date", "_score"])
+
+    # ---- Build name → employee_id map (exact + last-name fallback) ----
+    if employees_df is None or employees_df.empty:
+        print("[Pipeline] CS: no employees_df for CSAT scores name matching.")
+        return pd.DataFrame(columns=["employee_id", "date", "score"])
+
+    cs_emps = employees_df[employees_df["role"] == "cs"][["employee_id", "name"]].copy()
+    cs_emps["_lower"] = cs_emps["name"].str.strip().str.lower()
+    cs_emps["_last"]  = cs_emps["_lower"].str.split().str[-1]
+
+    name_to_id: dict[str, str] = dict(zip(cs_emps["_lower"], cs_emps["employee_id"]))
+    last_counts = cs_emps["_last"].value_counts()
+    last_to_id: dict[str, str] = {
+        row["_last"]: row["employee_id"]
+        for _, row in cs_emps.iterrows()
+        if last_counts[row["_last"]] == 1
+    }
+
+    def _resolve(name: str) -> str | None:
+        lower = name.strip().lower()
+        if lower in name_to_id:
+            return name_to_id[lower]
+        last = lower.split()[-1] if lower else ""
+        return last_to_id.get(last)
+
+    raw["_employee_id"] = raw["_csa"].map(_resolve)
+
+    unmatched = raw[raw["_employee_id"].isna()]["_csa"].unique()
+    for u in unmatched:
+        print(f"[Pipeline] CS CSAT scores: '{u}' not matched to any employee — skipping rows.")
+
+    raw = raw.dropna(subset=["_employee_id"])
+    result = raw.rename(columns={"_employee_id": "employee_id", "_date": "date", "_score": "score"})[
+        ["employee_id", "date", "score"]
+    ].reset_index(drop=True)
+
+    print(f"[Pipeline] CS: loaded CSAT scores from cs_csat_scores_report.csv — {len(result)} rows.")
+    return result
+
+
 def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None) -> dict:
     """Load CS performance CSVs. Returns empty DataFrames for any missing file.
 
-    NRR is computed dynamically from cs_book_of_business.csv + InputData.csv
-    when both files are present; otherwise falls back to the static cs_nrr.csv.
+    NRR is computed dynamically from cs_book_of_business.csv + InputData.csv.
+    CSAT sent is loaded from cs_csat_report.csv.
     """
 
     def _read(filename: str, parse_dates=None) -> pd.DataFrame:
@@ -239,18 +410,12 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
             df["employee_id"] = df["employee_id"].astype(str).str.strip()
         return df
 
-    # ---- NRR: compute dynamically if BoB file is present ----
-    bob_path = os.path.join(data_dir, "cs_book_of_business.csv")
-    if os.path.exists(bob_path) and employees_df is not None and not employees_df.empty:
-        from src.cs_nrr_loader import compute_cs_nrr
-        print("[Pipeline] CS: computing NRR from Book of Business + InputData...")
-        nrr = compute_cs_nrr(data_dir, employees_df)
-        if nrr.empty:
-            nrr = _read("cs_nrr.csv")
-    else:
-        nrr = _read("cs_nrr.csv")
-    csat_sent  = _read("cs_csat_sent.csv")
-    csat_scores = _read("cs_csat_scores.csv", parse_dates=["date"])
+    # ---- NRR: computed from cs_book_of_business.csv + InputData.csv ----
+    from src.cs_nrr_loader import compute_cs_nrr
+    print("[Pipeline] CS: computing NRR from Book of Business + InputData...")
+    nrr, nrr_breakdown = compute_cs_nrr(data_dir, employees_df if employees_df is not None else pd.DataFrame())
+    csat_sent   = _load_csat_sent(data_dir, employees_df)
+    csat_scores = _load_csat_scores(data_dir, employees_df)
     credits    = _read("cs_credits.csv")
     referrals    = _read("cs_referrals.csv",    parse_dates=["date"])
     nrr_targets  = _read("cs_nrr_targets.csv")
@@ -260,7 +425,7 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         referrals["month"] = referrals["date"].dt.to_period("M").dt.to_timestamp()
 
     # Normalise year/quarter columns
-    for df in (nrr, csat_sent, credits):
+    for df in (nrr, credits):
         if not df.empty:
             for col in ("year", "quarter"):
                 if col in df.columns:
@@ -272,12 +437,13 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         nrr_targets["nrr_target_pct"] = pd.to_numeric(nrr_targets["nrr_target_pct"], errors="coerce")
 
     return {
-        "nrr":         nrr,
-        "nrr_targets": nrr_targets,
-        "csat_sent":   csat_sent,
-        "csat_scores": csat_scores,
-        "credits":     credits,
-        "referrals":   referrals,
+        "nrr":           nrr,
+        "nrr_breakdown": nrr_breakdown,
+        "nrr_targets":   nrr_targets,
+        "csat_sent":     csat_sent,
+        "csat_scores":   csat_scores,
+        "credits":       credits,
+        "referrals":     referrals,
     }
 
 

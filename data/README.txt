@@ -66,7 +66,41 @@ OPTION B (fallback): employees.csv
    - Commission is triggered on invoice_date (not close_date)
    - date format: YYYY-MM-DD
 
-4. fx_rates.csv
+4. cs_book_of_business.csv
+   Source: CRM account list export (direct download, no reformatting needed)
+   Key columns used (by index): J=Flat Renewal ACV (converted), L=Account ID, T=CSA 2026
+   - Provides starting ARR per account and CSA assignment for NRR calculation
+   - Account ID: 15-char Salesforce ID (matched to 18-char IDs in InputData)
+   - CSA name matched to employee via Humaans name, last-name fallback
+
+5. InputData.csv
+   Source: Salesforce opportunities export (direct download, no reformatting needed)
+   Key columns: Account Id Casesafe, Type, Stage, Attainment New ACV (converted), Close Date
+   - Type="Add-On" → add-on component of NRR
+   - Type="Renewal", Stage≠"Closed Lost" → upsell/downsell component
+   - Type="Renewal", Stage="Closed Lost" → churn component
+   - Close Date format: DD/MM/YYYY
+   - NRR is cumulative YTD through the end of each quarter
+
+6. cs_csat_report.csv
+   Source: CRM survey-sent report export (direct download, no reformatting needed)
+   Columns: Subject, First Name, Last Name, Date, Assigned, Account Name
+   - Assigned: CSA full name (matched to employee via Humaans name, last-name fallback)
+   - Date format: DD/MM/YYYY
+   - Each row = one CSAT survey sent to a contact; multiple rows per account are valid
+     and each is counted individually toward the CSA's sent total
+   - The app derives csats_sent per employee per quarter automatically (cumulative YTD)
+   - Encoding: CP1252 (as exported by CRM)
+
+7. cs_csat_scores_report.csv
+   Source: CRM survey-response report export (direct download, no reformatting needed)
+   Columns: CSA, Account, Survey Response: Created Date, Survey Response: Survey Response Name, Score
+   - CSA: CSA full name (matched to employee via Humaans name, last-name fallback)
+   - Score: integer 1–5
+   - Date format: DD/MM/YYYY
+   - Encoding: CP1252 (as exported by CRM)
+
+8. fx_rates.csv
    Columns: month, EUR_SEK, EUR_GBP, EUR_USD
    - month: first day of the month, format YYYY-MM-DD
    - Rates used to convert ACV-based commissions from EUR to local currency
@@ -91,7 +125,7 @@ COMMISSION PAYOUT TIMING
 FILES AUTO-MANAGED
 ------------------
 
-5. approval_state.json
+9. approval_state.json
    - Tracks approval status for each employee-month (pending/approved/sent)
    - Do NOT edit manually — managed by the application
    - Safe to delete to reset all approval states

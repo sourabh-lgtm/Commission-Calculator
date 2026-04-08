@@ -346,6 +346,42 @@ class CSACommissionPlan(BaseCommissionPlan):
                         "is_forecast":      False,
                     })
 
+                    # Per-account NRR breakdown sub-rows
+                    bkd_df = cs_performance.get("nrr_breakdown", pd.DataFrame())
+                    if not bkd_df.empty:
+                        acct_rows = bkd_df[
+                            (bkd_df["employee_id"] == emp_id) &
+                            (bkd_df["year"] == year) &
+                            (bkd_df["quarter"] == quarter)
+                        ].sort_values("base_arr", ascending=False)
+                        for _, ar in acct_rows.iterrows():
+                            add_on     = float(ar.get("add_on", 0) or 0)
+                            upsell_dwn = float(ar.get("upsell_downsell", 0) or 0)
+                            churn      = float(ar.get("churn", 0) or 0)
+                            base       = float(ar.get("base_arr", 0) or 0)
+                            net        = add_on + upsell_dwn + churn
+                            parts = []
+                            if add_on:
+                                parts.append(f"Add-on: {add_on:+,.0f}")
+                            if upsell_dwn:
+                                parts.append(f"Renewal Δ: {upsell_dwn:+,.0f}")
+                            if churn:
+                                parts.append(f"Churn: {churn:+,.0f}")
+                            rows.append({
+                                "type":             "CS NRR Account",
+                                "date":             "",
+                                "opportunity_id":   str(ar.get("account_id", "")),
+                                "opportunity_name": str(ar.get("account_name", "")),
+                                "document_number":  "",
+                                "sao_type":         "",
+                                "acv_eur":          None,
+                                "fx_rate":          None,
+                                "rate_desc":        f"Base ARR: {base:,.0f}  |  " + "  |  ".join(parts) if parts else f"Base ARR: {base:,.0f}",
+                                "commission":       net,
+                                "currency":         currency,
+                                "is_forecast":      False,
+                            })
+
             csat_sent_df = cs_performance.get("csat_sent", pd.DataFrame())
             scores_df    = cs_performance.get("csat_scores", pd.DataFrame())
             if not csat_sent_df.empty:
