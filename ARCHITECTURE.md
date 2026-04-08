@@ -1,6 +1,6 @@
 # Commission Calculator — Architecture & Codebase Reference
 
-> Living document for onboarding future Claude sessions. Last updated: 2026-04-08.
+> Living document for onboarding future Claude sessions. Last updated: 2026-04-08. Changes: CS dashboard workings tab, role-specific PDF pages, accruals banding fix.
 
 ---
 
@@ -42,14 +42,27 @@ Commission Calculator/
 │   ├── reports.py              # All JSON report builder functions (called from API routes)
 │   ├── spif.py                 # SPIF award calculation logic
 │   ├── approval_state.py       # JSON-backed per-employee approval state machine
-│   ├── pdf_generator.py        # ReportLab commission statement PDF generation
+│   ├── pdf_generator.py        # ReportLab commission statement PDFs — role-specific pages
+│   │                           #   generate_statement() dispatches on employee["role"]:
+│   │                           #   CS → _cs_summary_page() + _cs_workings_page()
+│   │                           #   SDR/AE/AM → _summary_page() + _workings_page()
 │   ├── email_sender.py         # SMTP email dispatch (statements + Excel reports)
 │   ├── helpers.py              # Shared utilities: get_fx_rate, quarter_months, clean_json, etc.
-│   └── commission_plans/
-│       ├── __init__.py         # get_plan(role) registry
-│       ├── base.py             # BaseCommissionPlan ABC
-│       ├── sdr.py              # SDRCommissionPlan
-│       └── cs.py               # CSACommissionPlan (Climate Strategy Advisors)
+│   ├── commission_plans/
+│   │   ├── __init__.py         # get_plan(role) registry
+│   │   ├── base.py             # BaseCommissionPlan ABC
+│   │   ├── sdr.py              # SDRCommissionPlan
+│   │   └── cs.py               # CSACommissionPlan (Climate Strategy Advisors)
+│   └── dashboards/
+│       ├── base.py             # Shared HTML/CSS/JS (assemble_html, shared tab loaders)
+│       │                       #   loadWorkings() — role-aware: CS branch vs SDR/AE/AM branch
+│       │                       #   loadAccrualSummary() — employer-contrib detection by explicit
+│       │                       #     type name, not by type !== 'Commission'
+│       ├── sdr.py              # SDR-specific nav links, tab HTML, role JS
+│       ├── cs.py               # CS-specific nav links, tab HTML, role JS
+│       ├── ae.py               # AE-specific nav links, tab HTML, role JS
+│       ├── am.py               # AM-specific nav links, tab HTML, role JS
+│       └── __init__.py         # build_dashboard_html(role) dispatcher
 │
 ├── data/                       # Input CSVs — gitignored (contains PII)
 │   ├── README.txt              # Detailed data file spec (column names, formats, rules)
@@ -363,12 +376,15 @@ Both return raw `bytes` (in-memory workbook), suitable for HTTP response or emai
 
 ---
 
-## Frontend (embedded in launch.py `_build_html()`)
+## Frontend (src/dashboards/ + launch.py)
 
-Single HTML page (~400 lines starting around `launch.py:420`). No build step, no framework.
+Single HTML page assembled at request time by `build_dashboard_html(role)`. No build step, no framework.
 
 - **Chart.js** loaded from CDN for bar/line charts
-- Tabs: Team Overview, SDR Detail, Monthly Summary, Quarterly Summary, Payroll, Accruals, SPIFs, Approval
+- Each role has its own dashboard module (`src/dashboards/<role>.py`) that contributes: nav links, tab HTML panels, and role-specific JS. `base.py` provides the shared CSS, shared tab loaders, and `assemble_html()`.
+- **JS loading order**: `role_js` is injected before `_SHARED_JS`. This means shared functions (e.g. `loadWorkings`) are defined last and win. Role-specific overrides must therefore live inside shared functions as role-detected branches (using `globalRole()`), not as top-level function redefinitions.
+- **`loadWorkings()` is role-aware**: detects `globalRole() === 'cs'` and renders CS-specific KPI cards (Total Payout, NRR Bonus, CSAT Bonus, Credits Bonus, Referral Comm, Accelerator) and a 5-column table (Date · Component · Account/Period · Rate/Tier · Amount). SDR/AE/AM get the original 8-column SAO audit table.
+- **`loadAccrualSummary()` banding**: employer-contribution rows are identified by explicit type name (`"Employer NI (13.8%)"`, `"Employer Social Contributions (31%)"`) — not by `type !== 'Commission'`. This ensures CS rows (`"CS Bonus Accrual (full potential)"`) are styled and totalled as commission, not as employer contributions.
 - All data fetched via `fetch('/api/...')` calls to the local server
 - PDF preview opens `/api/preview_pdf` in an iframe
 
@@ -402,12 +418,14 @@ Single HTML page (~400 lines starting around `launch.py:420`). No build step, no
 
 ## Adding a New Commission Plan
 
-1. Create `src/commission_plans/<role>.py` — subclass `BaseCommissionPlan`, implement all 4 abstract methods. See `cs.py` as an example of a salary-based quarterly plan; see `sdr.py` for a transaction-based monthly plan.
-2. Register it in `src/commission_plans/__init__.py` `get_plan()` function
-3. Add the job title → role mapping(s) to `_TITLE_RULES` in `src/humaans_loader.py`
-4. The pipeline's Stage 3 will automatically pick it up for any employee whose `role` matches
-5. Update `payroll_summary()` and `accrual_summary()` in `src/reports.py` to include the new role
-6. Update `_sheet_commission_workings()` in `export_excel.py` to include the new role
+1. Create `src/commission_plans/<role>.py` — subclass `BaseCommissionPlan`, implement all 4 abstract methods. See `cs.py` for a salary-based quarterly plan; `sdr.py` for a transaction-based monthly plan.
+2. Register it in `src/commission_plans/__init__.py` `get_plan()` function.
+3. Add the job title → role mapping(s) to `_TITLE_RULES` in `src/humaans_loader.py`.
+4. The pipeline's Stage 3 will automatically pick it up for any employee whose `role` matches.
+5. Update `payroll_summary()` and `accrual_summary()` in `src/reports.py` to include the new role. For `accrual_summary()`: the `type` string you assign to accrual rows must **not** be `"Employer NI (13.8%)"` or `"Employer Social Contributions (31%)"` — those are the only strings treated as employer contributions in the UI banding.
+6. Update `_sheet_commission_workings()` in `export_excel.py` to include the new role.
+7. Create `src/dashboards/<role>.py` — define `_NAV_LINKS`, `_TABS_HTML`, `_ROLE_JS`, and `build_html()`. Register it in `src/dashboards/__init__.py`. For role-specific workings rendering, add a branch inside `loadWorkings()` in `src/dashboards/base.py` (do not redefine `loadWorkings` in role JS — the shared JS loads last and would override it).
+8. Update `generate_statement()` in `src/pdf_generator.py`: add a branch in the role dispatch to call new `_<role>_summary_page()` and `_<role>_workings_page()` functions.
 
 ---
 
@@ -423,6 +441,7 @@ Single HTML page (~400 lines starting around `launch.py:420`). No build step, no
 | CS bonus showing 0 | Check `cs_nrr.csv`, `cs_csat_sent.csv`, `cs_credits.csv` have a row for (employee_id, year, quarter); verify `employee_id` matches exactly |
 | CS CSAT bonus showing 0 | Verify `cs_csat_sent.csv` has `csats_sent >= 10` for the quarter; check `cs_csat_scores.csv` dates fall within the quarter |
 | CS accrual not showing | `reports.py` `accrual_summary()` CS section; check `salary_history` has records for that employee |
+| CS accrual rows dimmed/in wrong total | The `type` string for CS rows must not equal `"Employer NI (13.8%)"` or `"Employer Social Contributions (31%)"` — those are the only two strings `loadAccrualSummary()` treats as employer contributions |
 | CS referral not appearing | Check `cs_referrals.csv` `employee_id` matches and `date` parses correctly; `is_closed_won` / `is_forecast` values |
 | Approval auto-reset on refresh | `approval_state.py` `check_and_reset_stale()` — total changed since approval |
 | Email not sending | `config.ini` SMTP section; check `launch.py` `SMTP_CONFIG` global |

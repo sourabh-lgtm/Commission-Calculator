@@ -45,6 +45,7 @@ def generate_statement(
     month_ts = date.fromisoformat(month_str)
     period_label = month_ts.strftime("%B %Y")   # "February 2026"
     currency = employee.get("currency", "EUR")
+    role = employee.get("role", "sdr")
 
     doc = SimpleDocTemplate(
         output_path,
@@ -56,21 +57,27 @@ def generate_statement(
     story = []
 
     # ------------------------------------------------------------------
-    # PAGE 1 — Cover
+    # PAGE 1 — Cover (shared)
     # ------------------------------------------------------------------
     story.extend(_cover_page(employee, period_label, logo_path))
     story.append(PageBreak())
 
     # ------------------------------------------------------------------
-    # PAGE 2 — Commission Summary
+    # PAGE 2 — Summary  (role-specific)
     # ------------------------------------------------------------------
-    story.extend(_summary_page(employee, period_label, summary, accelerator, currency))
+    if role == "cs":
+        story.extend(_cs_summary_page(employee, period_label, summary, currency))
+    else:
+        story.extend(_summary_page(employee, period_label, summary, accelerator, currency))
     story.append(PageBreak())
 
     # ------------------------------------------------------------------
-    # PAGE 3+ — Full Workings
+    # PAGE 3+ — Full Workings  (role-specific)
     # ------------------------------------------------------------------
-    story.extend(_workings_page(employee, period_label, workings_rows, currency))
+    if role == "cs":
+        story.extend(_cs_workings_page(employee, period_label, workings_rows, summary, currency))
+    else:
+        story.extend(_workings_page(employee, period_label, workings_rows, currency))
 
     doc.build(story)
     return output_path
@@ -357,6 +364,252 @@ def _workings_page(employee, period_label, rows, currency):
             ("TEXTCOLOR", (0, idx), (-1, idx), PURPLE),
             ("FONT",      (0, idx), (-1, idx), "Helvetica-Bold", 9),
         ]
+
+    tbl.setStyle(TableStyle(style_cmds))
+    elements.append(tbl)
+    return elements
+
+
+# ---------------------------------------------------------------------------
+# CS summary page
+# ---------------------------------------------------------------------------
+
+def _cs_summary_page(employee, period_label, summary, currency):
+    elements = []
+    w = CONTENT_W
+    sym = _sym(currency)
+
+    elements.append(_para(f"Bonus Summary — {period_label}", _style(
+        "h1", fontName="Helvetica-Bold", fontSize=16, textColor=BLACK, spaceAfter=4
+    )))
+    elements.append(_para(employee.get("name", ""), _style(
+        "sub", fontName="Helvetica", fontSize=12, textColor=DIM, spaceAfter=10
+    )))
+    elements.append(HRFlowable(width=w, color=BORDER, thickness=1))
+    elements.append(Spacer(1, 5*mm))
+
+    def _fmt(v):
+        if v is None or v == "" or v == 0:
+            return "—"
+        try:
+            f = float(v)
+            return f"{sym}{f:,.2f}" if f != 0 else "—"
+        except Exception:
+            return str(v)
+
+    def _pct(v):
+        try:
+            return f"{float(v):.1f}%" if v else "—"
+        except Exception:
+            return "—"
+
+    nrr_pct          = float(summary.get("nrr_pct", 0) or 0)
+    csat_pct         = float(summary.get("csat_score_pct", 0) or 0)
+    credits_pct      = float(summary.get("credits_used_pct", 0) or 0)
+    q_target         = float(summary.get("quarterly_bonus_target", 0) or 0)
+    nrr_bonus        = float(summary.get("nrr_bonus", 0) or 0)
+    csat_bonus       = float(summary.get("csat_bonus", 0) or 0)
+    credits_bonus    = float(summary.get("credits_bonus", 0) or 0)
+    accel_topup      = float(summary.get("accelerator_topup", 0) or 0)
+    ref_sao_count    = int(summary.get("referral_sao_count", 0) or 0)
+    ref_sao_comm     = float(summary.get("referral_sao_comm", 0) or 0)
+    ref_cw_comm      = float(summary.get("referral_cw_comm", 0) or 0)
+    total            = float(summary.get("total_commission", 0) or 0)
+
+    # NRR tier description
+    nrr_tier = "< 90% → 0%"
+    for lo, hi, frac in [(90,92,50),(92,94,60),(94,96,70),(96,98,80),(98,100,90),(100,101,100)]:
+        if lo <= nrr_pct < hi:
+            nrr_tier = f"{lo}–{hi}% band → {frac}% payout"; break
+    if nrr_pct >= 100:
+        nrr_tier = "≥ 100% → 100% payout"
+
+    # CSAT tier description
+    if csat_pct < 80:
+        csat_tier = "< 80% → 0%"
+    elif csat_pct < 90:
+        csat_tier = "80–90% → 50% payout"
+    else:
+        csat_tier = "≥ 90% → 100% payout"
+
+    # Credits tier description
+    if credits_pct < 50:
+        credits_tier = "< 50% → 0%"
+    elif credits_pct < 75:
+        credits_tier = "50–75% → 50% payout"
+    elif credits_pct < 100:
+        credits_tier = "75–100% → 75% payout"
+    else:
+        credits_tier = "≥ 100% → 100% payout"
+
+    is_q_end = q_target > 0
+
+    rows: list[list] = [["Component", "Score / Qty", "Rate / Basis", f"Amount ({currency})"]]
+
+    if is_q_end:
+        rows += [
+            ["Quarterly Bonus Target", "—", "15% × annual salary ÷ 4", _fmt(q_target)],
+            ["NRR (50% weight)", _pct(nrr_pct), nrr_tier, _fmt(nrr_bonus)],
+            ["CSAT (35% weight)", _pct(csat_pct), csat_tier, _fmt(csat_bonus)],
+            ["Service Credits (15% weight)", _pct(credits_pct), credits_tier, _fmt(credits_bonus)],
+        ]
+        if accel_topup:
+            excess = round(nrr_pct - 100, 2) if nrr_pct > 100 else 0
+            rows.append(["NRR Accelerator Top-up", f"+{excess:.1f}% above 100%",
+                         "+2% of NRR portion per 1% above 100%", _fmt(accel_topup)])
+
+    if ref_sao_count:
+        rows.append(["Referral SAO Commissions",
+                     f"{ref_sao_count} referral{'s' if ref_sao_count != 1 else ''}",
+                     "Fixed rate per referral confirmed as SAO", _fmt(ref_sao_comm)])
+    if ref_cw_comm:
+        rows.append(["Referral Closed-Won Comm", "—", "5% / 1% of ACV (outbound / inbound)", _fmt(ref_cw_comm)])
+
+    rows.append(["TOTAL PAYOUT", "", "", _fmt(total)])
+    total_row_idx = len(rows) - 1
+
+    col_w = [100*mm, 32*mm, w - 100*mm - 32*mm - 40*mm, 40*mm]
+    tbl = Table(rows, colWidths=col_w)
+
+    style_cmds = [
+        ("BACKGROUND",  (0, 0), (-1, 0), CORAL),
+        ("TEXTCOLOR",   (0, 0), (-1, 0), WHITE),
+        ("FONT",        (0, 0), (-1, 0), "Helvetica-Bold", 10),
+        ("ALIGN",       (1, 0), (-1, 0), "RIGHT"),
+        ("FONT",        (0, 1), (-1, total_row_idx - 1), "Helvetica", 10),
+        ("ALIGN",       (1, 1), (-1, -1), "RIGHT"),
+        ("TOPPADDING",  (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING",(0,0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("GRID",        (0, 0), (-1, -1), 0.5, BORDER),
+        *[("BACKGROUND", (0, i), (-1, i), CARD_BG) for i in range(1, total_row_idx) if i % 2 == 0],
+        ("BACKGROUND",  (0, total_row_idx), (-1, total_row_idx), colors.HexColor("#EEEEEE")),
+        ("FONT",        (0, total_row_idx), (-1, total_row_idx), "Helvetica-Bold", 11),
+        ("LINEABOVE",   (0, total_row_idx), (-1, total_row_idx), 1.5, BLACK),
+    ]
+    tbl.setStyle(TableStyle(style_cmds))
+    elements.append(tbl)
+    elements.append(Spacer(1, 6*mm))
+
+    if not is_q_end:
+        elements.append(_para(
+            "Quarterly bonus (NRR, CSAT, Service Credits) is paid in quarter-end months only "
+            "(March, June, September, December).",
+            _style("note", fontName="Helvetica", fontSize=10, textColor=DIM)
+        ))
+        elements.append(Spacer(1, 4*mm))
+
+    elements.append(_para(
+        "Payment is made on the last payroll date of the month following the month in which "
+        "the payout becomes due. Subject to statutory deductions. Confidential.",
+        _style("disc", fontName="Helvetica", fontSize=8, textColor=DIM)
+    ))
+    return elements
+
+
+# ---------------------------------------------------------------------------
+# CS workings page
+# ---------------------------------------------------------------------------
+
+def _cs_workings_page(employee, period_label, rows, summary, currency):
+    elements = []
+    w = CONTENT_W
+    sym = _sym(currency)
+
+    elements.append(_para(f"Bonus Workings — {period_label}", _style(
+        "h1", fontName="Helvetica-Bold", fontSize=14, textColor=BLACK, spaceAfter=4
+    )))
+    elements.append(_para(employee.get("name", ""), _style(
+        "sub", fontName="Helvetica", fontSize=11, textColor=DIM, spaceAfter=8
+    )))
+    elements.append(HRFlowable(width=w, color=BORDER, thickness=1))
+    elements.append(Spacer(1, 4*mm))
+
+    if not rows:
+        elements.append(_para("No qualifying activities this period.", _style(
+            "empty", fontName="Helvetica", fontSize=10, textColor=DIM
+        )))
+        return elements
+
+    # Bonus amounts for quarterly rows (backend sets commission=None on these)
+    _bonus_amts = {
+        "CS Bonus \u2014 NRR (50%)":             float(summary.get("nrr_bonus", 0) or 0),
+        "CS Bonus \u2014 CSAT (35%)":            float(summary.get("csat_bonus", 0) or 0),
+        "CS Bonus \u2014 Service Credits (15%)": float(summary.get("credits_bonus", 0) or 0),
+    }
+
+    # Column widths: Date | Component | Account/Period | Rate/Tier | Amount
+    col_w = [22*mm, 62*mm, 75*mm, w - 22*mm - 62*mm - 75*mm - 36*mm, 36*mm]
+    header = ["Date", "Component", "Account / Period", "Rate / Tier", f"Amount ({currency})"]
+    data = [header]
+
+    _cell_style = ParagraphStyle("cs_wk_cell", fontName="Helvetica", fontSize=9, leading=11)
+    _bonus_style = ParagraphStyle("cs_wk_bonus", fontName="Helvetica-Bold", fontSize=9, leading=11, textColor=CORAL)
+    _fcst_style  = ParagraphStyle("cs_wk_fcst",  fontName="Helvetica", fontSize=9, leading=11, textColor=DIM)
+
+    total = 0.0
+    bonus_row_indices = []
+
+    for i, r in enumerate(rows, start=1):
+        row_type = r.get("type", "")
+        is_bonus = row_type in _bonus_amts
+        is_forecast = bool(r.get("is_forecast", False))
+
+        comm = _bonus_amts.get(row_type) if is_bonus else (float(r.get("commission") or 0))
+        total += 0.0 if is_forecast else comm
+
+        account = r.get("opportunity_name") or r.get("opportunity_id", "")
+        rate_desc = r.get("rate_desc", "") or ""
+
+        # Surface ACV and FX inline for closed-won referral rows
+        if r.get("acv_eur") and r.get("fx_rate"):
+            rate_desc = (f"ACV {_sym('EUR')}{_num(r['acv_eur'])} EUR "
+                         f"\u00d7 {float(r['fx_rate']):.4f} \u2192 {rate_desc}")
+
+        if is_bonus:
+            comm_str = f"{sym}{comm:,.2f}" if comm else "—"
+        elif is_forecast:
+            comm_str = f"{sym}{comm:,.2f} (forecast)"
+        else:
+            comm_str = f"{sym}{comm:,.2f}"
+
+        cell_s = _bonus_style if is_bonus else (_fcst_style if is_forecast else _cell_style)
+        data.append([
+            r.get("date", ""),
+            Paragraph(row_type, cell_s),
+            Paragraph(str(account), _cell_style),
+            Paragraph(rate_desc, _cell_style),
+            comm_str,
+        ])
+
+        if is_bonus:
+            bonus_row_indices.append(i)
+
+    data.append(["", "", "", "TOTAL", f"{sym}{total:,.2f}"])
+    total_row_idx = len(data) - 1
+
+    tbl = Table(data, colWidths=col_w)
+    style_cmds = [
+        ("BACKGROUND",    (0, 0), (-1, 0), CORAL),
+        ("TEXTCOLOR",     (0, 0), (-1, 0), WHITE),
+        ("FONT",          (0, 0), (-1, 0), "Helvetica-Bold", 9),
+        ("FONT",          (0, 1), (-1, total_row_idx - 1), "Helvetica", 9),
+        ("ALIGN",         (4, 0), (4, -1), "RIGHT"),
+        ("ALIGN",         (3, total_row_idx), (3, total_row_idx), "RIGHT"),
+        ("TOPPADDING",    (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING",   (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING",  (4, 0), (4, -1), 6),
+        ("GRID",          (0, 0), (-1, -1), 0.4, BORDER),
+        ("VALIGN",        (0, 0), (-1, -1), "MIDDLE"),
+        *[("BACKGROUND", (0, i), (-1, i), CARD_BG) for i in range(1, total_row_idx) if i % 2 == 0],
+        ("BACKGROUND",    (0, total_row_idx), (-1, total_row_idx), colors.HexColor("#EEEEEE")),
+        ("FONT",          (0, total_row_idx), (-1, total_row_idx), "Helvetica-Bold", 9),
+        ("LINEABOVE",     (0, total_row_idx), (-1, total_row_idx), 1, BLACK),
+    ]
+    # Highlight quarterly bonus rows in coral
+    for idx in bonus_row_indices:
+        style_cmds += [("BACKGROUND", (0, idx), (-1, idx), colors.HexColor("#FFF3F0"))]
 
     tbl.setStyle(TableStyle(style_cmds))
     elements.append(tbl)
