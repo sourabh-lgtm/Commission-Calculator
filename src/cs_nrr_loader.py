@@ -117,13 +117,34 @@ def compute_cs_nrr(
            .copy()
     )
 
-    # ---- Build name → employee_id map ----
+    # ---- Build name → employee_id map (with last-name fallback) ----
     cs_emps = employees_df[employees_df["role"] == "cs"][["employee_id", "name"]].copy()
-    cs_emps["_name_lower"] = cs_emps["name"].str.strip().str.lower()
+    cs_emps["_name_lower"]     = cs_emps["name"].str.strip().str.lower()
+    cs_emps["_last_name_lower"] = cs_emps["_name_lower"].str.split().str[-1]
+
+    # Primary: exact full-name match
     name_to_id: dict[str, str] = {
         row["_name_lower"]: row["employee_id"]
         for _, row in cs_emps.iterrows()
     }
+    # Fallback: last-name match (only registered if unique — avoids false matches)
+    last_name_counts = cs_emps["_last_name_lower"].value_counts()
+    last_name_to_id: dict[str, str] = {
+        row["_last_name_lower"]: row["employee_id"]
+        for _, row in cs_emps.iterrows()
+        if last_name_counts[row["_last_name_lower"]] == 1
+    }
+
+    def _resolve_name(name: str) -> str | None:
+        lower = name.strip().lower()
+        if lower in name_to_id:
+            return name_to_id[lower]
+        last = lower.split()[-1]
+        if last in last_name_to_id:
+            matched_emp = cs_emps[cs_emps["_last_name_lower"] == last]["name"].iloc[0]
+            print(f"[NRR] Name alias: '{name}' -> '{matched_emp}'")
+            return last_name_to_id[last]
+        return None
 
     # ---- Determine which year-quarters to compute ----
     if year is not None and quarter is not None:
@@ -148,8 +169,7 @@ def compute_cs_nrr(
     results: list[dict] = []
 
     for csa_name, grp in bob.groupby("_csa_name"):
-        csa_lower = csa_name.lower()
-        emp_id = name_to_id.get(csa_lower)
+        emp_id = _resolve_name(csa_name)
         if emp_id is None:
             print(f"[NRR] Warning: CSA '{csa_name}' not found in employees — skipping.")
             continue
