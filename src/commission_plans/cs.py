@@ -199,13 +199,27 @@ class CSACommissionPlan(BaseCommissionPlan):
         salary_history: pd.DataFrame = None,
         cs_performance: dict = None,
     ) -> dict:
-        """Compute NRR accelerator: +2% of NRR portion per 1% NRR above 100%."""
+        """Compute NRR accelerator: +2% of NRR portion per 1% above target.
+
+        Only paid at year-end (Q4) based on full-year cumulative NRR.
+        """
         emp_id   = employee["employee_id"]
         currency = employee["currency"]
         q_months = quarter_months(year, quarter)
         q_end    = quarter_end_month(q_months[0])
 
         accelerator_topup = 0.0
+
+        # Accelerator is year-end only
+        if quarter != 4:
+            return {
+                "employee_id":       emp_id,
+                "year":              year,
+                "quarter":           quarter,
+                "quarter_end_month": q_end,
+                "currency":          currency,
+                "accelerator_topup": 0.0,
+            }
 
         if cs_performance:
             nrr_df = cs_performance.get("nrr", pd.DataFrame())
