@@ -100,9 +100,14 @@ def compute_cs_nrr(
     csa_col  = bob.columns[19]  # CSA 2026
     name_col = bob.columns[5]   # Account Name
 
+    renewal_date_col = bob.columns[12]  # "Renewal Date"
+
     bob["_account_id_15"] = bob[id_col].astype(str).str.strip().str[:15]
     bob["_csa_name"]      = bob[csa_col].astype(str).str.strip()
     bob["_account_name"]  = bob[name_col].astype(str).str.strip()
+    bob["_renewal_date"]  = pd.to_datetime(
+        bob[renewal_date_col].astype(str), format="%d/%m/%Y", errors="coerce"
+    )
     # Remove thousand-separator commas before numeric conversion
     bob["_arr"]           = pd.to_numeric(
         bob[arr_col].astype(str).str.replace(",", "", regex=False),
@@ -116,6 +121,13 @@ def compute_cs_nrr(
         (bob["_account_id_15"] != "") &
         (bob["_account_id_15"] != "nan")
     ].copy()
+
+    # Per-account renewal date lookup (take first non-null date per account)
+    acct_renewal: dict[str, pd.Timestamp | None] = {
+        acct_id: (grp_acct["_renewal_date"].dropna().iloc[0]
+                  if not grp_acct["_renewal_date"].dropna().empty else None)
+        for acct_id, grp_acct in bob.groupby("_account_id_15")
+    }
 
     # ---- Load InputData ----
     inp = _read_csv(input_path)
@@ -229,6 +241,25 @@ def compute_cs_nrr(
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] == "Closed Lost")
             ]["_attainment"].sum()
 
+            # ---- Synthetic churn: contracts expired in YTD window with no renewal record ----
+            inp_q_renewal_accts = set(inp_q[inp_q["_type"] == "Renewal"]["_account_id_15"].tolist())
+            synth_churns: dict[str, float] = {}
+            for acct_id, arr in acct_arr.items():
+                rd = acct_renewal.get(acct_id)
+                if rd is None or pd.isna(rd):
+                    continue
+                if not (ytd_start <= rd <= q_end):
+                    continue
+                if acct_id in inp_q_renewal_accts:
+                    continue  # Already has a real renewal/churn record
+                synth_churns[acct_id] = -arr
+                print(
+                    f"[NRR] Synthetic churn: {csa_name} "
+                    f"{acct_name_map.get(acct_id, acct_id)} "
+                    f"Q{qt} {yr}  renewal_date={rd.date()}  ARR={arr:,.0f}"
+                )
+            churn += sum(synth_churns.values())
+
             nrr_numerator = total_arr + add_ons + upsell_down + churn
             nrr_pct       = round((nrr_numerator / total_arr) * 100, 4)
 
@@ -246,7 +277,7 @@ def compute_cs_nrr(
                 "nrr_pct":     nrr_pct,
             })
 
-            # ---- Per-account breakdown (accounts with activity only) ----
+            # ---- Per-account breakdown (accounts with activity or synthetic churn) ----
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon  = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
@@ -257,7 +288,11 @@ def compute_cs_nrr(
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] == "Closed Lost")
                 ]["_attainment"].sum()
 
-                # Only include accounts that had some activity this period
+                # Add synthetic churn if this account had no renewal record
+                if acct_id in synth_churns:
+                    acct_churn += synth_churns[acct_id]
+
+                # Only include accounts that had some activity or synthetic churn
                 if acct_addon == 0 and acct_upsell == 0 and acct_churn == 0:
                     continue
 
@@ -319,9 +354,14 @@ def compute_cs_lead_nrr(
     csa_col  = bob.columns[19]  # CSA 2026
     name_col = bob.columns[5]   # Account Name
 
+    renewal_date_col_lead = bob.columns[12]  # "Renewal Date"
+
     bob["_account_id_15"] = bob[id_col].astype(str).str.strip().str[:15]
     bob["_csa_name"]      = bob[csa_col].astype(str).str.strip()
     bob["_account_name"]  = bob[name_col].astype(str).str.strip()
+    bob["_renewal_date"]  = pd.to_datetime(
+        bob[renewal_date_col_lead].astype(str), format="%d/%m/%Y", errors="coerce"
+    )
     bob["_arr"]           = pd.to_numeric(
         bob[arr_col].astype(str).str.replace(",", "", regex=False),
         errors="coerce",
@@ -415,6 +455,13 @@ def compute_cs_lead_nrr(
         acct_ids = set(acct_arr.keys())
         inp_team = inp_dedup[inp_dedup["_account_id_15"].isin(acct_ids)].copy()
 
+        # Per-account renewal date lookup for this team's accounts
+        acct_renewal_lead: dict[str, pd.Timestamp | None] = {
+            acct_id: (grp_a["_renewal_date"].dropna().iloc[0]
+                      if not grp_a["_renewal_date"].dropna().empty else None)
+            for acct_id, grp_a in team_bob.groupby("_account_id_15")
+        }
+
         for yr, qt in yq_pairs:
             ytd_start, _ = _quarter_range(yr, 1)
             _, q_end     = _quarter_range(yr, qt)
@@ -430,6 +477,25 @@ def compute_cs_lead_nrr(
             churn       = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] == "Closed Lost")
             ]["_attainment"].sum()
+
+            # ---- Synthetic churn: contracts expired in YTD window with no renewal record ----
+            inp_q_renewal_accts = set(inp_q[inp_q["_type"] == "Renewal"]["_account_id_15"].tolist())
+            synth_churns_lead: dict[str, float] = {}
+            for acct_id, arr in acct_arr.items():
+                rd = acct_renewal_lead.get(acct_id)
+                if rd is None or pd.isna(rd):
+                    continue
+                if not (ytd_start <= rd <= q_end):
+                    continue
+                if acct_id in inp_q_renewal_accts:
+                    continue  # Already has a real renewal/churn record
+                synth_churns_lead[acct_id] = -arr
+                print(
+                    f"[NRR Lead] Synthetic churn: {lead['name']} "
+                    f"{acct_name_map.get(acct_id, acct_id)} "
+                    f"Q{qt} {yr}  renewal_date={rd.date()}  ARR={arr:,.0f}"
+                )
+            churn += sum(synth_churns_lead.values())
 
             nrr_numerator = total_arr + add_ons + upsell_down + churn
             nrr_pct       = round((nrr_numerator / total_arr) * 100, 4)
@@ -451,6 +517,10 @@ def compute_cs_lead_nrr(
                 acct_churn  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] == "Closed Lost")
                 ]["_attainment"].sum()
+
+                # Add synthetic churn if this account had no renewal record
+                if acct_id in synth_churns_lead:
+                    acct_churn += synth_churns_lead[acct_id]
 
                 if acct_addon == 0 and acct_upsell == 0 and acct_churn == 0:
                     continue
