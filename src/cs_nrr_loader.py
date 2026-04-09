@@ -80,7 +80,7 @@ def compute_cs_nrr(
     _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
     _empty_bkd = pd.DataFrame(columns=[
         "employee_id", "year", "quarter", "account_id", "account_name",
-        "base_arr", "add_on", "upsell_downsell", "churn",
+        "base_arr", "add_on", "one_off", "upsell_downsell", "churn",
     ])
 
     if not os.path.exists(bob_path):
@@ -136,6 +136,10 @@ def compute_cs_nrr(
     inp["_type"]          = inp["Type"].astype(str).str.strip()
     inp["_stage"]         = inp["Stage"].astype(str).str.strip()
     inp["_attainment"]    = pd.to_numeric(inp["Attainment New ACV (converted)"], errors="coerce").fillna(0)
+    inp["_nr_tcv"]        = pd.to_numeric(
+        inp.get("Non-Recurring TCV (converted)", pd.Series(dtype=str)),
+        errors="coerce",
+    ).fillna(0)
     inp["_close_date"]    = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
 
     # Deduplicate by Opportunity Id — keep one row per opp (product lines inflate counts)
@@ -234,6 +238,7 @@ def compute_cs_nrr(
             ].copy()
 
             add_ons       = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
+            one_off       = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
             upsell_down   = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -260,12 +265,12 @@ def compute_cs_nrr(
                 )
             churn += sum(synth_churns.values())
 
-            nrr_numerator = total_arr + add_ons + upsell_down + churn
+            nrr_numerator = total_arr + add_ons + one_off + upsell_down + churn
             nrr_pct       = round((nrr_numerator / total_arr) * 100, 4)
 
             print(
                 f"[NRR] {csa_name} Q{qt} {yr}: "
-                f"ARR={total_arr:,.0f}  addon={add_ons:,.0f}  "
+                f"ARR={total_arr:,.0f}  addon={add_ons:,.0f}  one_off={one_off:,.0f}  "
                 f"upsell/down={upsell_down:,.0f}  churn={churn:,.0f}  "
                 f"NRR={nrr_pct:.2f}%"
             )
@@ -280,11 +285,12 @@ def compute_cs_nrr(
             # ---- Per-account breakdown (accounts with activity or synthetic churn) ----
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q = inp_q[inp_q["_account_id_15"] == acct_id]
-                acct_addon  = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_upsell = acct_q[
+                acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
+                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+                acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
-                acct_churn  = acct_q[
+                acct_churn   = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] == "Closed Lost")
                 ]["_attainment"].sum()
 
@@ -293,7 +299,7 @@ def compute_cs_nrr(
                     acct_churn += synth_churns[acct_id]
 
                 # Only include accounts that had some activity or synthetic churn
-                if acct_addon == 0 and acct_upsell == 0 and acct_churn == 0:
+                if acct_addon == 0 and acct_one_off == 0 and acct_upsell == 0 and acct_churn == 0:
                     continue
 
                 breakdown.append({
@@ -304,6 +310,7 @@ def compute_cs_nrr(
                     "account_name":   acct_name_map.get(acct_id, acct_id),
                     "base_arr":       base_arr,
                     "add_on":         acct_addon,
+                    "one_off":        acct_one_off,
                     "upsell_downsell": acct_upsell,
                     "churn":          acct_churn,
                 })
@@ -336,7 +343,7 @@ def compute_cs_lead_nrr(
     _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
     _empty_bkd = pd.DataFrame(columns=[
         "employee_id", "year", "quarter", "account_id", "account_name",
-        "base_arr", "add_on", "upsell_downsell", "churn",
+        "base_arr", "add_on", "one_off", "upsell_downsell", "churn",
     ])
 
     leads = employees_df[employees_df["role"] == "cs_lead"]
@@ -376,6 +383,10 @@ def compute_cs_lead_nrr(
     inp["_type"]          = inp["Type"].astype(str).str.strip()
     inp["_stage"]         = inp["Stage"].astype(str).str.strip()
     inp["_attainment"]    = pd.to_numeric(inp["Attainment New ACV (converted)"], errors="coerce").fillna(0)
+    inp["_nr_tcv"]        = pd.to_numeric(
+        inp.get("Non-Recurring TCV (converted)", pd.Series(dtype=str)),
+        errors="coerce",
+    ).fillna(0)
     inp["_close_date"]    = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
     inp_dedup = (
         inp.dropna(subset=["_close_date"])
@@ -471,6 +482,7 @@ def compute_cs_lead_nrr(
             ].copy()
 
             add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
+            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
             upsell_down = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -497,24 +509,25 @@ def compute_cs_lead_nrr(
                 )
             churn += sum(synth_churns_lead.values())
 
-            nrr_numerator = total_arr + add_ons + upsell_down + churn
+            nrr_numerator = total_arr + add_ons + one_off + upsell_down + churn
             nrr_pct       = round((nrr_numerator / total_arr) * 100, 4)
 
             print(
                 f"[NRR Lead] {lead['name']} Q{qt} {yr}: "
-                f"TeamARR={total_arr:,.0f}  addon={add_ons:,.0f}  "
+                f"TeamARR={total_arr:,.0f}  addon={add_ons:,.0f}  one_off={one_off:,.0f}  "
                 f"upsell/down={upsell_down:,.0f}  churn={churn:,.0f}  NRR={nrr_pct:.2f}%"
             )
 
             results.append({"employee_id": lead_id, "year": yr, "quarter": qt, "nrr_pct": nrr_pct})
 
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
-                acct_q      = inp_q[inp_q["_account_id_15"] == acct_id]
-                acct_addon  = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_upsell = acct_q[
+                acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
+                acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
+                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+                acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
-                acct_churn  = acct_q[
+                acct_churn   = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] == "Closed Lost")
                 ]["_attainment"].sum()
 
@@ -522,7 +535,7 @@ def compute_cs_lead_nrr(
                 if acct_id in synth_churns_lead:
                     acct_churn += synth_churns_lead[acct_id]
 
-                if acct_addon == 0 and acct_upsell == 0 and acct_churn == 0:
+                if acct_addon == 0 and acct_one_off == 0 and acct_upsell == 0 and acct_churn == 0:
                     continue
 
                 breakdown.append({
@@ -533,6 +546,7 @@ def compute_cs_lead_nrr(
                     "account_name":   acct_name_map.get(acct_id, acct_id),
                     "base_arr":       base_arr,
                     "add_on":         acct_addon,
+                    "one_off":        acct_one_off,
                     "upsell_downsell": acct_upsell,
                     "churn":          acct_churn,
                 })
@@ -616,6 +630,8 @@ def compute_cs_lead_multi_year_acv(
         for _, r in all_cs.iterrows()
         if last_counts[r["_last_name_lower"]] == 1
     }
+    # Set of all CS employee names (lower) — used to gate multi-year ACV by opp ownership
+    cs_names_lower: set[str] = set(all_cs["_name_lower"].tolist())
 
     # Load InputData — renewal deals with contract date info
     inp = _read_csv(input_path)
@@ -628,14 +644,19 @@ def compute_cs_lead_multi_year_acv(
     inp["_flat_acv"]        = pd.to_numeric(inp.get("Flat Renewal ACV (converted)", pd.Series(dtype=str)), errors="coerce").fillna(0)
     inp["_tcv"]             = pd.to_numeric(inp.get("Recurring TCV (converted)",    pd.Series(dtype=str)), errors="coerce").fillna(0)
     inp["_opp_name"]        = inp["Opportunity Name"].astype(str).str.strip()
+    inp["_opp_owner_lower"] = inp["Opportunity Owner"].astype(str).str.strip().str.lower()
 
+    # Only include renewals where the Opportunity Owner is a CS employee.
+    # This ensures AMs/AEs who own deals in a CSA's book do not generate
+    # multi-year ACV commission for the CS lead.
     renewals = (
         inp[
             (inp["_type"] == "Renewal") &
             (inp["_stage"] != "Closed Lost") &
             inp["_close_date"].notna() &
             inp["_contract_start"].notna() &
-            inp["_contract_end"].notna()
+            inp["_contract_end"].notna() &
+            inp["_opp_owner_lower"].isin(cs_names_lower)
         ]
         .drop_duplicates(subset=["Opportunity Id Casesafe"])
         .copy()

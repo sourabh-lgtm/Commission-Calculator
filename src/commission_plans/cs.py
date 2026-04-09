@@ -356,13 +356,16 @@ class CSACommissionPlan(BaseCommissionPlan):
                         ].sort_values("base_arr", ascending=False)
                         for _, ar in acct_rows.iterrows():
                             add_on     = float(ar.get("add_on", 0) or 0)
+                            one_off    = float(ar.get("one_off", 0) or 0)
                             upsell_dwn = float(ar.get("upsell_downsell", 0) or 0)
                             churn      = float(ar.get("churn", 0) or 0)
                             base       = float(ar.get("base_arr", 0) or 0)
-                            net        = add_on + upsell_dwn + churn
+                            net        = add_on + one_off + upsell_dwn + churn
                             parts = []
                             if add_on:
                                 parts.append(f"Add-on: {add_on:+,.0f}")
+                            if one_off:
+                                parts.append(f"One-off svc (50%): {one_off:+,.0f}")
                             if upsell_dwn:
                                 parts.append(f"Renewal Δ: {upsell_dwn:+,.0f}")
                             if churn:

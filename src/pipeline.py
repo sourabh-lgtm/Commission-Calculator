@@ -466,6 +466,62 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
     raw["_csa"]       = raw["Account: CSA: Full Name"].astype(str).str.strip()
     raw = raw.dropna(subset=["_end_date"])
 
+    # ---- Exclude credit rows for churned accounts ----
+    # An account is considered churned for a given credits period (year, quarter)
+    # if it has a Renewal Closed Lost in InputData whose close date falls within
+    # the same year-quarter as the credit's Contract Year End Date.
+    # This prevents CSAs from being penalised twice: once via NRR churn, and once
+    # via unused credits on an account they no longer manage.
+    input_path = os.path.join(data_dir, "InputData.csv")
+    # Set of (account_name_lower, year, quarter) tuples for churned accounts
+    churned_acct_periods: set[tuple[str, int, int]] = set()
+    if os.path.exists(input_path):
+        for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+            try:
+                inp_churn = pd.read_csv(input_path, encoding=enc,
+                                        usecols=["Account Name", "Type", "Stage", "Close Date"])
+                inp_churn.columns = inp_churn.columns.str.strip()
+                inp_churn["_close"] = pd.to_datetime(
+                    inp_churn["Close Date"], format="%d/%m/%Y", errors="coerce"
+                )
+                churn_rows = inp_churn[
+                    (inp_churn["Type"] == "Renewal") &
+                    (inp_churn["Stage"] == "Closed Lost") &
+                    inp_churn["_close"].notna()
+                ].copy()
+                churn_rows["_yr"]  = churn_rows["_close"].dt.year
+                churn_rows["_qt"]  = ((churn_rows["_close"].dt.month - 1) // 3 + 1)
+                churn_rows["_acct"] = churn_rows["Account Name"].str.strip().str.lower()
+                churned_acct_periods = set(
+                    zip(churn_rows["_acct"], churn_rows["_yr"], churn_rows["_qt"])
+                )
+                break
+            except Exception:
+                continue
+
+    if churned_acct_periods:
+        _DEAL_TYPES = [" - Add-On - ", " - New Business - ", " - Renewal - "]
+
+        def _acct_prefix(opp_name: str) -> str:
+            for dt in _DEAL_TYPES:
+                idx = opp_name.find(dt)
+                if idx > 0:
+                    return opp_name[:idx].strip().lower()
+            return opp_name.strip().lower()
+
+        raw["_acct_prefix"] = raw["Opportunity: Opportunity Name"].astype(str).map(_acct_prefix)
+        # We need year/quarter from the end date for period-matching; compute temporarily
+        raw["_end_yr"] = raw["_end_date"].dt.year
+        raw["_end_qt"] = ((raw["_end_date"].dt.month - 1) // 3 + 1)
+        churned_mask = raw.apply(
+            lambda r: (r["_acct_prefix"], r["_end_yr"], r["_end_qt"]) in churned_acct_periods,
+            axis=1,
+        )
+        if churned_mask.any():
+            for acct in sorted(raw[churned_mask]["_acct_prefix"].unique()):
+                print(f"[Pipeline] CS credits: excluding churned account '{acct}'")
+            raw = raw[~churned_mask].copy()
+
     raw["_year"]    = raw["_end_date"].dt.year
     raw["_quarter"] = ((raw["_end_date"].dt.month - 1) // 3 + 1)
 

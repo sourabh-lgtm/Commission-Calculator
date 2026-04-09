@@ -1,6 +1,6 @@
 # Commission Calculator — Architecture & Codebase Reference
 
-> Living document for onboarding future Claude sessions. Last updated: 2026-04-08. Changes: CS dashboard workings tab, role-specific PDF pages, accruals banding fix.
+> Living document for onboarding future Claude sessions. Last updated: 2026-04-09. Changes: cs_lead role (team-aggregate NRR/CSAT/credits, 20% bonus, multi-year ACV), synthetic churn for expired contracts, CSA no-credits default (100% payout), duplicate credits bug fix, one-off services (50% Non-Recurring TCV on Add-Ons in NRR), multi-year ACV gated by CS Opportunity Ownership, churned account credit exclusion (period-specific).
 
 ---
 
@@ -39,6 +39,15 @@ Commission Calculator/
 │   ├── loader.py               # CSV loading, SAO deduplication, data routing
 │   ├── humaans_loader.py       # Humaans HR export parser; job title → role mapping
 │   ├── closed_won_commission.py# ACV commission calculation from InputData + NetSuite invoices
+│   ├── cs_nrr_loader.py        # Computes NRR from cs_book_of_business.csv + InputData.csv
+│   │                           #   compute_cs_nrr()          — per-CSA NRR (individual BoB)
+│   │                           #   compute_cs_lead_nrr()     — team-aggregate NRR for cs_leads
+│   │                           #   compute_cs_lead_multi_year_acv() — multi-year ACV deals
+│   │                           #   NRR numerator = ARR + add_ons + one_off(50%) + upsell + churn
+│   │                           #   one_off = 50% of Non-Recurring TCV on Add-On deals (CSA/AM split)
+│   │                           #   Both NRR functions include synthetic churn for expired
+│   │                           #   contracts (Renewal Date in YTD window, no renewal record)
+│   │                           #   multi-year ACV: Opportunity Owner must be a CS employee
 │   ├── reports.py              # All JSON report builder functions (called from API routes)
 │   ├── spif.py                 # SPIF award calculation logic
 │   ├── approval_state.py       # JSON-backed per-employee approval state machine
@@ -76,7 +85,12 @@ Commission Calculator/
 │   ├── approval_state.json     # Auto-managed approval state (safe to delete to reset)
 │   │
 │   │   # CS (Climate Strategy) performance inputs — filled by Finance each quarter
-│   ├── cs_nrr.csv              # NRR% per employee per quarter
+│   ├── cs_book_of_business.csv # Book of Business: one row per account per CSA
+│   │                           #   col 6  (index 5)  = Account Name
+│   │                           #   col 10 (index 9)  = Flat Renewal ACV (converted) — base ARR
+│   │                           #   col 12 (index 11) = Account ID (15-char Salesforce ID)
+│   │                           #   col 13 (index 12) = Renewal Date (DD/MM/YYYY)
+│   │                           #   col 20 (index 19) = CSA 2026 — name matched to employees
 │   ├── cs_csat_sent.csv        # Total CSATs sent per employee per quarter (threshold check)
 │   ├── cs_csat_scores.csv      # Individual CSAT scores 0–5 (one row per response)
 │   ├── cs_credits.csv          # Service tier credits used % per employee per quarter
@@ -206,20 +220,37 @@ class CommissionModel:
 
 ### CS Plan — Climate Strategy Advisors (src/commission_plans/cs.py)
 
-**Role**: `cs` | **Payout frequency**: Quarterly (booked to Mar/Jun/Sep/Dec)
+**Roles**: `cs` (CSA) and `cs_lead` (Team Lead) | **Payout frequency**: Quarterly (booked to Mar/Jun/Sep/Dec)
 
-**Annual bonus**: 15% of base salary, prorated quarterly.
-`quarterly_bonus_target = salary_monthly × 12 × 0.15 / 4`
+**Annual bonus**:
+- CSA (`cs`): **15%** of base salary, prorated quarterly. `quarterly_bonus_target = salary_monthly × 12 × 0.15 / 4`
+- Team Lead (`cs_lead`): **20%** of base salary, prorated quarterly. `quarterly_bonus_target = salary_monthly × 12 × 0.20 / 4`
 
 Salary comes from `salary_history` (latest effective record at or before the quarter-end month).
 
 **Three measures:**
 
-| Measure | Weight | Source CSV | Target |
-|---|---|---|---|
-| NRR (Net Revenue Retention) | 50% | `cs_nrr.csv` | 100% NRR on individual book of business |
-| CSAT | 35% | `cs_csat_sent.csv` + `cs_csat_scores.csv` | ≥90% avg score; ≥10 CSATs sent |
-| Service tier credits usage | 15% | `cs_credits.csv` | 100% of credits used on renewals |
+| Measure | Weight | Source (CSA) | Source (Team Lead) | Target |
+|---|---|---|---|---|
+| NRR | 50% | Individual BoB via `cs_nrr_loader.compute_cs_nrr()` | Team-aggregate BoB via `compute_cs_lead_nrr()` | 100% NRR |
+| CSAT | 35% | Individual scores in `cs_csat_scores.csv` | Team-aggregate scores | ≥90% avg; ≥10 sent |
+| Service credits | 15% | `cs_credits.csv` (per CSA) | Team-aggregate credits (pooled in pipeline) | 100% used |
+
+**NRR data source**: NRR is computed automatically from `cs_book_of_business.csv` + `InputData.csv` by `cs_nrr_loader.py`. No manual `cs_nrr.csv` needed.
+
+**NRR formula**: `NRR = (ARR + add_ons + one_off + upsell_downsell + churn) / ARR × 100`
+- `add_ons` = Attainment New ACV on `Type=Add-On` deals (recurring expansion)
+- `one_off` = **50% of Non-Recurring TCV** on `Type=Add-On` deals — represents the CSA's share of one-off services (e.g. implementations). The AM receives the other 50%. Visible in workings as "One-off svc (50%)".
+- `upsell_downsell` = Attainment New ACV on `Type=Renewal` (Closed Won)
+- `churn` = Attainment New ACV on `Type=Renewal` (Closed Lost) — already negative in Salesforce
+
+**Synthetic churn**: accounts in the BoB whose Renewal Date (column 13) falls within the YTD window (Jan 1 – Q end) and have no matching `Type=Renewal` record in InputData are treated as churned (−ARR added to the NRR numerator).
+
+**Team Lead NRR/CSAT/Credits**: pools all accounts belonging to the lead's direct reports plus the lead's own accounts. Pipeline computes `compute_cs_lead_nrr()` separately and merges result into `cs_performance["nrr"]` alongside individual CSA rows.
+
+**Team Lead extras** (on own accounts only):
+- Multi-year ACV commission: 1% of multi-year portion of renewal ACV (TCV − flat ACV, or flat ACV × (years − 1)) for renewal deals with contract duration > 12 months **where the Opportunity Owner is a CS employee**. Deals owned by AMs/AEs are excluded even if the account is in the lead's BoB.
+- Referral commissions: same rates as SDR referrals
 
 **NRR payout tiers** (50% weight):
 
@@ -242,6 +273,8 @@ Salary comes from `salary_history` (latest effective record at or before the qua
 
 **Service credits payout tiers** (15% weight):
 - < 50%: 0% | 50–74.99%: 50% | 75–99.99%: 75% | 100%: 100%
+- Credit rows for **churned accounts** are automatically excluded: `_load_credits()` in `pipeline.py` cross-references InputData for accounts with a `Renewal Closed Lost` whose close date falls in the same year-quarter as the credit's Contract Year End Date. This prevents double-penalising a CSA via both NRR churn and unused credits.
+- CSAs with no credit rows at all in the period get 100% payout by default (no credits at risk).
 
 **Referral commissions** (calculated monthly, same rates as SDR):
 - Source: `data/cs_referrals.csv` — one row per referral, columns: `employee_id, date, account_name, referral_type, acv_eur, is_closed_won, is_forecast`
@@ -414,6 +447,12 @@ Single HTML page assembled at request time by `build_dashboard_html(role)`. No b
 
 11. **Plan window enforcement** — if an employee joined mid-year or changed roles, `plan_start_date`/`plan_end_date` from Humaans ensure they only get commission for months they were in the role.
 
+12. **One-off services split 50/50** — for Add-On deals, the Non-Recurring TCV (implementations, one-off services) is split equally between the CSA and the AM. The CSA's 50% share is added to their NRR numerator. The `Attainment New ACV` (recurring expansion) is credited 100% to the CSA.
+
+13. **Multi-year ACV requires CS ownership** — team leads only earn multi-year ACV commission on renewal deals where they (or a CS colleague) are the Opportunity Owner. If the deal is owned by an AM/AE, no multi-year ACV commission is generated for the CS lead even if the account is in their BoB.
+
+14. **Churned account credits excluded** — when an account churns (Renewal Closed Lost) in a given quarter, its credit rows for that same quarter are excluded from the service credits calculation. Period-specific: a Q2 churn does not retroactively affect Q1 credits.
+
 ---
 
 ## Adding a New Commission Plan
@@ -439,6 +478,9 @@ Single HTML page assembled at request time by `build_dashboard_html(role)`. No b
 | Employee missing from dashboard | `humaans_loader.py` `_TITLE_RULES` — check their job title mapping |
 | CS employee missing | Check their Humaans title matches a "climate strategy" pattern in `_TITLE_RULES` |
 | CS bonus showing 0 | Check `cs_nrr.csv`, `cs_csat_sent.csv`, `cs_credits.csv` have a row for (employee_id, year, quarter); verify `employee_id` matches exactly |
+| NRR one-off not appearing | Verify Add-On deal has non-zero `Non-Recurring TCV (converted)` in InputData and the account is in the CSA's BoB |
+| Multi-year ACV unexpected | Check Opportunity Owner in InputData — must be a CS employee; AMs/AEs are excluded. See `compute_cs_lead_multi_year_acv()` |
+| Credits score wrong / churned included | Check InputData for Renewal Closed Lost rows for that account in the same quarter; `_load_credits()` in pipeline.py logs excluded accounts |
 | CS CSAT bonus showing 0 | Verify `cs_csat_sent.csv` has `csats_sent >= 10` for the quarter; check `cs_csat_scores.csv` dates fall within the quarter |
 | CS accrual not showing | `reports.py` `accrual_summary()` CS section; check `salary_history` has records for that employee |
 | CS accrual rows dimmed/in wrong total | The `type` string for CS rows must not equal `"Employer NI (13.8%)"` or `"Employer Social Contributions (31%)"` — those are the only two strings `loadAccrualSummary()` treats as employer contributions |
