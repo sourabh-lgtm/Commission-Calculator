@@ -241,208 +241,52 @@ class CSLeadCommissionPlan(CSACommissionPlan):
         rates    = self.get_rates(currency)
         rows: list[dict] = []
 
-        # ---- Referral rows (same as CSA) ----
-        if cs_performance:
-            ref_df = cs_performance.get("referrals", pd.DataFrame())
-            if not ref_df.empty:
-                emp_ref = ref_df[
-                    (ref_df["employee_id"] == emp_id) &
-                    (ref_df["month"] == month)
-                ]
-                for _, r in emp_ref.iterrows():
-                    rtype    = str(r.get("referral_type", "")).lower()
-                    rate_key = "outbound" if rtype == "outbound" else "inbound"
-                    sao_rate = rates[rate_key]
-                    date_str = r["date"].strftime("%Y-%m-%d") if hasattr(r.get("date"), "strftime") else str(r.get("date", ""))
-                    account  = str(r.get("account_name", ""))
-
-                    rows.append({
-                        "type":             "CS Referral SAO",
-                        "date":             date_str,
-                        "opportunity_id":   account,
-                        "opportunity_name": account,
-                        "document_number":  "",
-                        "sao_type":         rtype,
-                        "acv_eur":          None,
-                        "fx_rate":          None,
-                        "rate_desc":        f"{currency} {sao_rate:,} / referral",
-                        "commission":       float(sao_rate),
-                        "currency":         currency,
-                        "is_forecast":      False,
-                    })
-
-                    if r.get("is_closed_won", False):
-                        acv_eur     = float(r.get("acv_eur", 0))
-                        cw_pct      = REFERRAL_CW_RATES[rate_key]
-                        is_forecast = bool(r.get("is_forecast", False))
-                        comm        = round(acv_eur * cw_pct * fx_rate, 2) if not is_forecast else 0.0
-                        rows.append({
-                            "type":             "Forecast Referral CW" if is_forecast else "Referral CW",
-                            "date":             date_str,
-                            "opportunity_id":   account,
-                            "opportunity_name": account,
-                            "document_number":  "",
-                            "sao_type":         rtype,
-                            "acv_eur":          acv_eur,
-                            "fx_rate":          fx_rate,
-                            "rate_desc":        f"{cw_pct*100:.0f}% of ACV × {fx_rate:.4f}" + (" (forecast)" if is_forecast else ""),
-                            "commission":       comm,
-                            "currency":         currency,
-                            "is_forecast":      is_forecast,
-                        })
-
-        # ---- Multi-year ACV rows ----
-        if cs_performance:
-            my_df = cs_performance.get("cs_lead_multi_year_acv", pd.DataFrame())
-            if not my_df.empty:
-                my_rows = my_df[
-                    (my_df["employee_id"] == emp_id) &
-                    (my_df["month"] == month)
-                ]
-                for _, r in my_rows.iterrows():
-                    acv_eur = float(r.get("acv_eur", 0))
-                    comm    = round(acv_eur * MULTI_YEAR_ACV_RATE * fx_rate, 2)
-                    yrs     = r.get("contract_years", 0)
-                    rows.append({
-                        "type":             "Multi-year ACV (1%)",
-                        "date":             month.strftime("%Y-%m-%d"),
-                        "opportunity_id":   str(r.get("opportunity_id", "")),
-                        "opportunity_name": str(r.get("opportunity_name", "")),
-                        "document_number":  "",
-                        "sao_type":         "",
-                        "acv_eur":          acv_eur,
-                        "fx_rate":          fx_rate,
-                        "rate_desc":        f"1% of multi-yr ACV ({yrs:.1f}yr contract) × {fx_rate:.4f}",
-                        "commission":       comm,
-                        "currency":         currency,
-                        "is_forecast":      False,
-                    })
-
-        # ---- Quarterly bonus summary rows (same structure as CSA) ----
         if month.month in (3, 6, 9, 12) and cs_performance:
             year    = month.year
             quarter = (month.month - 1) // 3 + 1
-            nrr_df  = cs_performance.get("nrr", pd.DataFrame())
+            rows += self._nrr_section_rows(emp_id, year, quarter, month, currency, cs_performance, nrr_label="Team NRR")
+            rows += self._csat_section_rows(emp_id, year, quarter, month, currency, cs_performance)
+            rows += self._credits_section_rows(emp_id, year, quarter, month, currency, cs_performance)
 
-            if not nrr_df.empty:
-                nrr_row = nrr_df[
-                    (nrr_df["employee_id"] == emp_id) &
-                    (nrr_df["year"] == year) &
-                    (nrr_df["quarter"] == quarter)
-                ]
-                if not nrr_row.empty:
-                    nrr_pct       = float(nrr_row["nrr_pct"].iloc[0])
-                    annual_target = self._get_nrr_target(emp_id, year, cs_performance)
-                    q_nrr_target  = self._quarterly_nrr_target(annual_target, quarter)
-                    payout_frac   = self._nrr_payout_fraction(nrr_pct, q_nrr_target, annual_target)
-                    rows.append({
-                        "type":             "CS Bonus — NRR (50%)",
-                        "date":             month.strftime("%Y-%m-%d"),
-                        "opportunity_id":   f"Q{quarter} {year}",
-                        "opportunity_name": f"Team NRR {nrr_pct:.1f}%",
-                        "document_number":  "",
-                        "sao_type":         "",
-                        "acv_eur":          None,
-                        "fx_rate":          None,
-                        "rate_desc":        f"Team NRR {nrr_pct:.1f}% (Q{quarter} target: {q_nrr_target:.1f}%) → {payout_frac*100:.0f}% payout (20% salary base)",
-                        "commission":       None,
-                        "currency":         currency,
-                        "is_forecast":      False,
-                    })
+        rows += self._multi_year_section_rows(emp_id, month, currency, fx_rate, cs_performance)
+        rows += self._referral_section_rows(emp_id, month, currency, fx_rate, rates, cs_performance)
+        return rows
 
-                    bkd_df = cs_performance.get("nrr_breakdown", pd.DataFrame())
-                    if not bkd_df.empty:
-                        acct_rows = bkd_df[
-                            (bkd_df["employee_id"] == emp_id) &
-                            (bkd_df["year"] == year) &
-                            (bkd_df["quarter"] == quarter)
-                        ].sort_values("base_arr", ascending=False)
-                        for _, ar in acct_rows.iterrows():
-                            add_on     = float(ar.get("add_on", 0) or 0)
-                            one_off    = float(ar.get("one_off", 0) or 0)
-                            upsell_dwn = float(ar.get("upsell_downsell", 0) or 0)
-                            churn      = float(ar.get("churn", 0) or 0)
-                            base       = float(ar.get("base_arr", 0) or 0)
-                            net        = add_on + one_off + upsell_dwn + churn
-                            parts = []
-                            if add_on:    parts.append(f"Add-on: {add_on:+,.0f}")
-                            if one_off:   parts.append(f"One-off svc (50%): {one_off:+,.0f}")
-                            if upsell_dwn: parts.append(f"Renewal Δ: {upsell_dwn:+,.0f}")
-                            if churn:     parts.append(f"Churn: {churn:+,.0f}")
-                            rows.append({
-                                "type":             "CS NRR Account",
-                                "date":             "",
-                                "opportunity_id":   str(ar.get("account_id", "")),
-                                "opportunity_name": str(ar.get("account_name", "")),
-                                "document_number":  "",
-                                "sao_type":         "",
-                                "acv_eur":          None,
-                                "fx_rate":          None,
-                                "rate_desc":        f"Base ARR: {base:,.0f}  |  " + "  |  ".join(parts) if parts else f"Base ARR: {base:,.0f}",
-                                "commission":       net,
-                                "currency":         currency,
-                                "is_forecast":      False,
-                            })
+    # ------------------------------------------------------------------
+    # CS Lead-specific section helper
+    # ------------------------------------------------------------------
 
-            csat_sent_df = cs_performance.get("csat_sent", pd.DataFrame())
-            scores_df    = cs_performance.get("csat_scores", pd.DataFrame())
-            if not csat_sent_df.empty:
-                sent_row = csat_sent_df[
-                    (csat_sent_df["employee_id"] == emp_id) &
-                    (csat_sent_df["year"] == year) &
-                    (csat_sent_df["quarter"] == quarter)
-                ]
-                csats_sent = int(sent_row["csats_sent"].iloc[0]) if not sent_row.empty else 0
+    def _multi_year_section_rows(self, emp_id, month, currency, fx_rate, cs_performance):
+        """Returns section header + multi-year ACV rows, or [] if no rows this month."""
+        if not cs_performance:
+            return []
+        my_df = cs_performance.get("cs_lead_multi_year_acv", pd.DataFrame())
+        if my_df.empty:
+            return []
+        my_rows = my_df[
+            (my_df["employee_id"] == emp_id) &
+            (my_df["month"] == month)
+        ]
+        if my_rows.empty:
+            return []
 
-                avg_score_pct = 0.0
-                if not scores_df.empty:
-                    q_start    = pd.Timestamp(year=year, month=(quarter - 1) * 3 + 1, day=1)
-                    q_end_ts   = quarter_end_month(q_start) + pd.offsets.MonthEnd(0)
-                    emp_scores = scores_df[
-                        (scores_df["employee_id"] == emp_id) &
-                        (scores_df["date"] >= q_start) &
-                        (scores_df["date"] <= q_end_ts)
-                    ]
-                    if not emp_scores.empty:
-                        avg_score_pct = float(emp_scores["score"].mean()) / 5.0 * 100.0
-
-                rows.append({
-                    "type":             "CS Bonus — CSAT (35%)",
-                    "date":             month.strftime("%Y-%m-%d"),
-                    "opportunity_id":   f"Q{quarter} {year}",
-                    "opportunity_name": f"Team CSAT {avg_score_pct:.1f}% ({csats_sent} sent)",
-                    "document_number":  "",
-                    "sao_type":         "",
-                    "acv_eur":          None,
-                    "fx_rate":          None,
-                    "rate_desc":        f"Team CSAT {avg_score_pct:.1f}% | sent={csats_sent} (min {CSAT_MIN_SENT})",
-                    "commission":       None,
-                    "currency":         currency,
-                    "is_forecast":      False,
-                })
-
-            credits_df = cs_performance.get("credits", pd.DataFrame())
-            if not credits_df.empty:
-                cr_row = credits_df[
-                    (credits_df["employee_id"] == emp_id) &
-                    (credits_df["year"] == year) &
-                    (credits_df["quarter"] == quarter)
-                ]
-                if not cr_row.empty:
-                    cr_pct = float(cr_row["credits_used_pct"].iloc[0])
-                    rows.append({
-                        "type":             "CS Bonus — Service Credits (15%)",
-                        "date":             month.strftime("%Y-%m-%d"),
-                        "opportunity_id":   f"Q{quarter} {year}",
-                        "opportunity_name": f"Team credits used {cr_pct:.1f}%",
-                        "document_number":  "",
-                        "sao_type":         "",
-                        "acv_eur":          None,
-                        "fx_rate":          None,
-                        "rate_desc":        f"Team service credits {cr_pct:.1f}% used",
-                        "commission":       None,
-                        "currency":         currency,
-                        "is_forecast":      False,
-                    })
-
+        rows = [self._section_row("Multi-year ACV", currency)]
+        for _, r in my_rows.iterrows():
+            acv_eur = float(r.get("acv_eur", 0))
+            comm    = round(acv_eur * MULTI_YEAR_ACV_RATE * fx_rate, 2)
+            yrs     = r.get("contract_years", 0)
+            rows.append({
+                "type":             "Multi-year ACV (1%)",
+                "date":             month.strftime("%Y-%m-%d"),
+                "opportunity_id":   str(r.get("opportunity_id", "")),
+                "opportunity_name": str(r.get("opportunity_name", "")),
+                "document_number":  "",
+                "sao_type":         "",
+                "acv_eur":          acv_eur,
+                "fx_rate":          fx_rate,
+                "rate_desc":        f"1% of multi-yr ACV ({yrs:.1f}yr contract) \u00d7 {fx_rate:.4f}",
+                "commission":       comm,
+                "currency":         currency,
+                "is_forecast":      False,
+            })
         return rows

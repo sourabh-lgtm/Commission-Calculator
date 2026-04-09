@@ -431,16 +431,20 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
       credits_used_pct = used / allocated * 100
     If allocated == 0 for a CSA in that quarter, treats as 100% (no credits at risk).
 
-    Returns DataFrame with: employee_id, year, quarter, credits_used_pct.
+    Returns three DataFrames:
+      result      — employee_id, year, quarter, credits_used_pct
+      raw_result  — employee_id, year, quarter, total_allocated, total_used
+      detail_df   — employee_id, year, quarter, opportunity_name, allocated, used
     """
     report_path = os.path.join(data_dir, "cs_credits_report.csv")
 
-    _empty_credits     = pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
-    _empty_credits_raw = pd.DataFrame(columns=["employee_id", "year", "quarter", "total_allocated", "total_used"])
+    _empty_credits        = pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+    _empty_credits_raw    = pd.DataFrame(columns=["employee_id", "year", "quarter", "total_allocated", "total_used"])
+    _empty_credits_detail = pd.DataFrame(columns=["employee_id", "year", "quarter", "opportunity_name", "allocated", "used"])
 
     if not os.path.exists(report_path):
         print("[Pipeline] CS: cs_credits_report.csv not found — skipping credits.")
-        return _empty_credits, _empty_credits_raw
+        return _empty_credits, _empty_credits_raw, _empty_credits_detail
 
     for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
         try:
@@ -450,7 +454,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
             continue
     else:
         print("[Pipeline] CS: cannot decode cs_credits_report.csv — skipping.")
-        return _empty_credits, _empty_credits_raw
+        return _empty_credits, _empty_credits_raw, _empty_credits_detail
 
     raw.columns = raw.columns.str.strip()
     required = {"Contract Year End Date", "Credits Allocated",
@@ -458,7 +462,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
     if not required.issubset(raw.columns):
         missing = required - set(raw.columns)
         print(f"[Pipeline] CS: cs_credits_report.csv missing columns {missing} — skipping.")
-        return _empty_credits, _empty_credits_raw
+        return _empty_credits, _empty_credits_raw, _empty_credits_detail
 
     raw["_end_date"]  = pd.to_datetime(raw["Contract Year End Date"], format="%d/%m/%Y", errors="coerce")
     raw["_allocated"] = pd.to_numeric(raw["Credits Allocated"], errors="coerce").fillna(0)
@@ -557,6 +561,29 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
 
     raw = raw.dropna(subset=["_employee_id"])
 
+    # ---- Build per-opportunity detail DataFrame ----
+    if "Opportunity: Opportunity Name" in raw.columns:
+        _opp_name_col = "Opportunity: Opportunity Name"
+    else:
+        _opp_name_col = "Credit Ledger Name" if "Credit Ledger Name" in raw.columns else None
+
+    if _opp_name_col is not None:
+        detail_df = raw[["_employee_id", "_year", "_quarter", _opp_name_col, "_allocated", "_used"]].copy()
+        detail_df = detail_df.rename(columns={
+            "_employee_id": "employee_id",
+            "_year":        "year",
+            "_quarter":     "quarter",
+            _opp_name_col:  "opportunity_name",
+            "_allocated":   "allocated",
+            "_used":        "used",
+        })
+    else:
+        detail_df = _empty_credits_detail.copy()
+
+    for col in ("year", "quarter"):
+        if col in detail_df.columns and not detail_df.empty:
+            detail_df[col] = detail_df[col].astype("Int64")
+
     # ---- Aggregate per employee per year-quarter ----
     agg = (
         raw.groupby(["_employee_id", "_year", "_quarter"])
@@ -584,7 +611,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
         raw_result[col] = raw_result[col].astype("Int64")
 
     print(f"[Pipeline] CS: loaded credits from cs_credits_report.csv — {len(result)} employee-quarter rows.")
-    return result, raw_result
+    return result, raw_result, detail_df
 
 
 def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None) -> dict:
@@ -631,7 +658,7 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
     # ---- CSAT and credits (include cs_lead employees in name matching) ----
     csat_sent   = _load_csat_sent(data_dir, employees_safe)
     csat_scores = _load_csat_scores(data_dir, employees_safe)
-    credits, credits_raw = _load_credits(data_dir, employees_safe)
+    credits, credits_raw, credits_detail = _load_credits(data_dir, employees_safe)
     referrals   = _read("cs_referrals.csv", parse_dates=["date"])
     nrr_targets = _read("cs_nrr_targets.csv")
 
@@ -694,6 +721,13 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
                     lead_credits = agg_cr[["employee_id", "year", "quarter", "credits_used_pct"]]
                     credits = pd.concat([credits, lead_credits], ignore_index=True)
 
+            # Credits detail: tag team members' detail rows with lead_id
+            if not credits_detail.empty:
+                team_cr_detail = credits_detail[credits_detail["employee_id"].isin(team_ids)].copy()
+                if not team_cr_detail.empty:
+                    team_cr_detail["employee_id"] = lead_id
+                    credits_detail = pd.concat([credits_detail, team_cr_detail], ignore_index=True)
+
     # Normalise year/quarter columns
     for df in (nrr,):
         if not df.empty:
@@ -712,6 +746,7 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         "csat_sent":              csat_sent,
         "csat_scores":            csat_scores,
         "credits":                credits,
+        "credits_detail":         credits_detail,
         "referrals":              referrals,
         "cs_lead_multi_year_acv": cs_lead_multi_year_acv,
     }

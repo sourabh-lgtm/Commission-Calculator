@@ -286,33 +286,95 @@ async function loadWorkings() {
       'CS Bonus \u2014 Service Credits (15%)': summary.credits_bonus || 0,
     };
 
-    const heads = ['Date','Component','Account / Period','Rate / Tier','Amount'];
-    const rowData = rows.map(r => {
-      let commStr;
-      if (r.type in bonusAmts) {
+    // Build custom HTML table for CS workings
+    const sym = cur === 'SEK' ? 'kr' : cur === 'GBP' ? '\u00a3' : '\u20ac';
+    let tblHtml = '<table style="width:100%;border-collapse:collapse;font-size:12px">';
+    tblHtml += '<thead><tr style="background:var(--accent);color:#000">';
+    ['Date','Component','Account / Period','Rate / Tier','Amount'].forEach((h,i) => {
+      tblHtml += '<th style="padding:8px 12px;text-align:' + (i===4?'right':'left') + ';font-size:10px;font-weight:700;letter-spacing:.5px;text-transform:uppercase">' + h + '</th>';
+    });
+    tblHtml += '</tr></thead><tbody>';
+
+    rows.forEach((r, idx) => {
+      const rateDescBase = r.rate_desc || '';
+      let rateDesc = rateDescBase;
+      if (r.acv_eur) rateDesc = 'ACV ' + fmtAmt(r.acv_eur, 'EUR') + ' \u00d7 ' + (r.fx_rate ? r.fx_rate.toFixed(4) : '1') + ' \u2192 ' + rateDesc;
+
+      if (r.type === 'CS Section') {
+        // Full-width section header
+        tblHtml += '<tr style="background:#3f3f3f;border-top:2px solid var(--border)">';
+        tblHtml += '<td colspan="5" style="padding:7px 12px;font-weight:700;font-size:12px;color:#fff;letter-spacing:.3px">' + (r.opportunity_name || '') + '</td>';
+        tblHtml += '</tr>';
+      } else if (r.type === 'CS NRR BoB') {
+        const amt = r.commission != null ? sym + fmtNum(r.commission) : '\u2014';
+        tblHtml += '<tr style="background:#F9FAFB">';
+        tblHtml += '<td style="padding:5px 12px;color:var(--dim)"></td>';
+        tblHtml += '<td style="padding:5px 12px;font-size:10px;color:var(--dim)">Base BoB</td>';
+        tblHtml += '<td style="padding:5px 12px;color:var(--dim)">' + (r.opportunity_name || '') + '</td>';
+        tblHtml += '<td style="padding:5px 12px;color:var(--dim);font-size:11px">' + rateDesc + '</td>';
+        tblHtml += '<td style="padding:5px 12px;text-align:right;font-weight:700">' + amt + '</td>';
+        tblHtml += '</tr>';
+      } else if (r.type === 'CS NRR Numerator') {
+        const amt = r.commission != null ? sym + fmtNum(r.commission) : '\u2014';
+        tblHtml += '<tr style="background:#F9FAFB;border-bottom:2px solid var(--border)">';
+        tblHtml += '<td style="padding:5px 12px;color:var(--dim)"></td>';
+        tblHtml += '<td style="padding:5px 12px;font-size:10px;color:var(--dim)">NRR Numerator</td>';
+        tblHtml += '<td style="padding:5px 12px;color:var(--dim)">' + (r.opportunity_name || '') + '</td>';
+        tblHtml += '<td style="padding:5px 12px;color:var(--dim);font-size:11px">' + rateDesc + '</td>';
+        tblHtml += '<td style="padding:5px 12px;text-align:right;font-weight:700">' + amt + '</td>';
+        tblHtml += '</tr>';
+      } else if (r.type === 'CS NRR Account') {
+        const net = r.commission != null ? (r.commission >= 0 ? '+' : '') + fmtNum(r.commission) : '\u2014';
+        tblHtml += '<tr style="background:#F7F7F7">';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px"></td>';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px;padding-left:20px">\u21b3</td>';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-weight:600;font-size:11px">' + (r.opportunity_name || '') + '</td>';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px">' + rateDesc + '</td>';
+        tblHtml += '<td style="padding:4px 12px;text-align:right;color:var(--dim);font-size:11px">' + net + '</td>';
+        tblHtml += '</tr>';
+      } else if (r.type === 'CS Credits Detail') {
+        tblHtml += '<tr style="background:#F7F7F7">';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px"></td>';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px;padding-left:20px">\u21b3</td>';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-weight:600;font-size:11px">' + (r.opportunity_name || '') + '</td>';
+        tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px">' + rateDesc + '</td>';
+        tblHtml += '<td style="padding:4px 12px;text-align:right;color:var(--dim);font-size:11px">\u2014</td>';
+        tblHtml += '</tr>';
+      } else if (r.type in bonusAmts) {
         const amt = bonusAmts[r.type];
-        commStr = amt > 0
+        const amtStr = amt > 0
           ? '<strong>' + fmtAmt(amt, cur) + '</strong>'
           : '<span style="color:var(--dim)">\u2014</span>';
-      } else if (r.commission !== null) {
-        commStr = r.is_forecast
-          ? '<span style="color:var(--dim)">' + fmtAmt(r.commission, cur) + ' (fcst)</span>'
-          : '<strong>' + fmtAmt(r.commission, cur) + '</strong>';
+        tblHtml += '<tr style="background:#FFF3F0">';
+        tblHtml += '<td style="padding:6px 12px;font-size:11px">' + (r.date || '') + '</td>';
+        tblHtml += '<td style="padding:6px 12px;font-weight:700;color:var(--accent)">' + r.type + '</td>';
+        tblHtml += '<td style="padding:6px 12px">' + (r.opportunity_name || '') + '</td>';
+        tblHtml += '<td style="padding:6px 12px;font-size:11px;color:var(--dim)">' + rateDesc + '</td>';
+        tblHtml += '<td style="padding:6px 12px;text-align:right">' + amtStr + '</td>';
+        tblHtml += '</tr>';
       } else {
-        commStr = '\u2014';
+        // Normal row (referrals, multi-year, etc.)
+        let commStr;
+        if (r.commission !== null && r.commission !== undefined) {
+          commStr = r.is_forecast
+            ? '<span style="color:var(--dim)">' + fmtAmt(r.commission, cur) + ' (fcst)</span>'
+            : '<strong>' + fmtAmt(r.commission, cur) + '</strong>';
+        } else {
+          commStr = '\u2014';
+        }
+        const rowStyle = r.is_forecast ? 'color:var(--dim);font-style:italic' : '';
+        tblHtml += '<tr style="' + rowStyle + (idx % 2 === 0 ? 'background:var(--card)' : '') + '">';
+        tblHtml += '<td style="padding:6px 12px;font-size:11px">' + (r.date || '') + '</td>';
+        tblHtml += '<td style="padding:6px 12px">' + r.type + '</td>';
+        tblHtml += '<td style="padding:6px 12px">' + (r.opportunity_name || r.opportunity_id || '') + '</td>';
+        tblHtml += '<td style="padding:6px 12px;font-size:11px;color:var(--dim)">' + rateDesc + '</td>';
+        tblHtml += '<td style="padding:6px 12px;text-align:right">' + commStr + '</td>';
+        tblHtml += '</tr>';
       }
-      // For referral CW rows, surface ACV and FX in the rate column
-      let rateDesc = r.rate_desc || '';
-      if (r.acv_eur) rateDesc = 'ACV ' + fmtAmt(r.acv_eur, 'EUR') + ' \u00d7 ' + (r.fx_rate ? r.fx_rate.toFixed(4) : '1') + ' \u2192 ' + rateDesc;
-      return [
-        r.date,
-        r.type,
-        r.opportunity_name || r.opportunity_id || '',
-        rateDesc,
-        commStr,
-      ];
     });
-    renderTable('wk-table', heads, rowData);
+
+    tblHtml += '</tbody></table>';
+    document.getElementById('wk-table').innerHTML = tblHtml;
     return;
   }
 

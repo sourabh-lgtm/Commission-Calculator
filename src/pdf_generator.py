@@ -564,20 +564,25 @@ def _cs_workings_page(employee, period_label, rows, summary, currency):
     _acct_style  = ParagraphStyle("cs_wk_acct",  fontName="Helvetica",      fontSize=8, leading=10, textColor=DIM)
     _acct_b_style = ParagraphStyle("cs_wk_acctb", fontName="Helvetica-Bold", fontSize=8, leading=10, textColor=DIM)
 
+    _section_style = ParagraphStyle("cs_wk_sect", fontName="Helvetica-Bold", fontSize=9, leading=11, textColor=WHITE)
+    _info_style    = ParagraphStyle("cs_wk_info",  fontName="Helvetica",      fontSize=8, leading=10, textColor=DIM)
+
     total = 0.0
-    bonus_row_indices = []
-    acct_row_indices  = []
+    bonus_row_indices   = []
+    acct_row_indices    = []
+    section_row_indices = []
+    info_row_indices    = []   # NRR BoB and Numerator rows
+    num_border_indices  = []   # NRR Numerator rows that get a bottom border
 
     for i, r in enumerate(rows, start=1):
         row_type    = r.get("type", "")
         is_bonus    = row_type in _bonus_amts
         is_forecast = bool(r.get("is_forecast", False))
         is_acct     = row_type == "CS NRR Account"
-
-        comm = _bonus_amts.get(row_type) if is_bonus else (float(r.get("commission") or 0))
-        # Account sub-rows show net impact but don't add to commission total
-        if not is_acct:
-            total += 0.0 if is_forecast else comm
+        is_section  = row_type == "CS Section"
+        is_nrr_bob  = row_type == "CS NRR BoB"
+        is_nrr_num  = row_type == "CS NRR Numerator"
+        is_cred_det = row_type == "CS Credits Detail"
 
         account   = r.get("opportunity_name") or r.get("opportunity_id", "")
         rate_desc = r.get("rate_desc", "") or ""
@@ -587,28 +592,56 @@ def _cs_workings_page(employee, period_label, rows, summary, currency):
             rate_desc = (f"ACV {_sym('EUR')}{_num(r['acv_eur'])} EUR "
                          f"\u00d7 {float(r['fx_rate']):.4f} \u2192 {rate_desc}")
 
-        if is_acct:
-            comm_str = f"{comm:+,.0f}" if comm else "—"
+        if is_section:
+            # Full-width row — fill all cells; SPAN applied in style_cmds
+            data.append([
+                Paragraph(str(account), _section_style),
+                "", "", "", "",
+            ])
+            section_row_indices.append(i)
+        elif is_nrr_bob or is_nrr_num:
+            comm_val = r.get("commission")
+            amt_str  = f"{int(comm_val):,}" if comm_val is not None else "\u2014"
+            label    = "Base BoB" if is_nrr_bob else "NRR Numerator"
             data.append([
                 "",
-                Paragraph("  ↳", _acct_style),
+                Paragraph(label, _info_style),
+                Paragraph(str(account), _info_style),
+                Paragraph(rate_desc, _info_style),
+                amt_str,
+            ])
+            info_row_indices.append(i)
+            if is_nrr_num:
+                num_border_indices.append(i)
+        elif is_acct or is_cred_det:
+            comm_val = r.get("commission")
+            if is_acct:
+                comm_str = f"{comm_val:+,.0f}" if comm_val else "\u2014"
+            else:
+                comm_str = "\u2014"
+            data.append([
+                "",
+                Paragraph("  \u21b3", _acct_style),
                 Paragraph(str(account), _acct_b_style),
                 Paragraph(rate_desc, _acct_style),
                 comm_str,
             ])
             acct_row_indices.append(i)
+            # Account sub-rows don't add to commission total
         elif is_bonus:
-            comm_str = f"{sym}{comm:,.2f}" if comm else "—"
-            cell_s = _bonus_style
+            comm = _bonus_amts.get(row_type, 0.0)
+            total += comm
+            comm_str = f"{sym}{comm:,.2f}" if comm else "\u2014"
             data.append([
                 r.get("date", ""),
-                Paragraph(row_type, cell_s),
+                Paragraph(row_type, _bonus_style),
                 Paragraph(str(account), _cell_style),
                 Paragraph(rate_desc, _cell_style),
                 comm_str,
             ])
             bonus_row_indices.append(i)
         elif is_forecast:
+            comm = float(r.get("commission") or 0)
             comm_str = f"{sym}{comm:,.2f} (forecast)"
             data.append([
                 r.get("date", ""),
@@ -618,6 +651,8 @@ def _cs_workings_page(employee, period_label, rows, summary, currency):
                 comm_str,
             ])
         else:
+            comm = float(r.get("commission") or 0)
+            total += comm
             comm_str = f"{sym}{comm:,.2f}"
             data.append([
                 r.get("date", ""),
@@ -649,10 +684,31 @@ def _cs_workings_page(employee, period_label, rows, summary, currency):
         ("FONT",          (0, total_row_idx), (-1, total_row_idx), "Helvetica-Bold", 9),
         ("LINEABOVE",     (0, total_row_idx), (-1, total_row_idx), 1, BLACK),
     ]
+    # Section header rows: dark bg, bold, spanning all columns
+    for idx in section_row_indices:
+        style_cmds += [
+            ("BACKGROUND",  (0, idx), (-1, idx), colors.HexColor("#3f3f3f")),
+            ("TEXTCOLOR",   (0, idx), (-1, idx), WHITE),
+            ("FONT",        (0, idx), (-1, idx), "Helvetica-Bold", 9),
+            ("SPAN",        (0, idx), (-1, idx)),
+            ("LINEABOVE",   (0, idx), (-1, idx), 1, colors.HexColor("#555555")),
+        ]
+    # NRR BoB / Numerator info rows: light bg, dim text
+    for idx in info_row_indices:
+        style_cmds += [
+            ("BACKGROUND",  (0, idx), (-1, idx), colors.HexColor("#F9FAFB")),
+            ("TEXTCOLOR",   (0, idx), (-1, idx), DIM),
+            ("FONT",        (0, idx), (-1, idx), "Helvetica", 8),
+        ]
+    # NRR Numerator rows: bottom border to visually separate from commission row
+    for idx in num_border_indices:
+        style_cmds += [
+            ("LINEBELOW",   (0, idx), (-1, idx), 1, BORDER),
+        ]
     # Highlight quarterly bonus rows in coral
     for idx in bonus_row_indices:
         style_cmds += [("BACKGROUND", (0, idx), (-1, idx), colors.HexColor("#FFF3F0"))]
-    # Account sub-rows: subtle indented background
+    # Account sub-rows (CS NRR Account and CS Credits Detail): subtle indented background
     for idx in acct_row_indices:
         style_cmds += [
             ("BACKGROUND",  (0, idx), (-1, idx), colors.HexColor("#F7F7F7")),
