@@ -435,9 +435,12 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
     """
     report_path = os.path.join(data_dir, "cs_credits_report.csv")
 
+    _empty_credits     = pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+    _empty_credits_raw = pd.DataFrame(columns=["employee_id", "year", "quarter", "total_allocated", "total_used"])
+
     if not os.path.exists(report_path):
         print("[Pipeline] CS: cs_credits_report.csv not found — skipping credits.")
-        return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+        return _empty_credits, _empty_credits_raw
 
     for enc in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
         try:
@@ -447,7 +450,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
             continue
     else:
         print("[Pipeline] CS: cannot decode cs_credits_report.csv — skipping.")
-        return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+        return _empty_credits, _empty_credits_raw
 
     raw.columns = raw.columns.str.strip()
     required = {"Contract Year End Date", "Credits Allocated",
@@ -455,7 +458,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
     if not required.issubset(raw.columns):
         missing = required - set(raw.columns)
         print(f"[Pipeline] CS: cs_credits_report.csv missing columns {missing} — skipping.")
-        return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
+        return _empty_credits, _empty_credits_raw
 
     raw["_end_date"]  = pd.to_datetime(raw["Contract Year End Date"], format="%d/%m/%Y", errors="coerce")
     raw["_allocated"] = pd.to_numeric(raw["Credits Allocated"], errors="coerce").fillna(0)
@@ -583,6 +586,15 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
     # ---- Team-lead aggregate CSAT + Credits ----
     if not employees_safe.empty:
         cs_leads = employees_safe[employees_safe["role"] == "cs_lead"]
+
+        # Drop individual credits rows for cs_leads — they'll be replaced by
+        # team-aggregate rows below (which correctly sum lead's own accounts +
+        # all team members' accounts). Without this, the plan's .iloc[0] lookup
+        # would hit the individual row rather than the team aggregate.
+        if not credits.empty and not cs_leads.empty:
+            lead_ids = set(cs_leads["employee_id"].astype(str))
+            credits  = credits[~credits["employee_id"].astype(str).isin(lead_ids)].copy()
+
         for _, lead in cs_leads.iterrows():
             lead_id    = lead["employee_id"]
             team_ids   = list(employees_safe[
