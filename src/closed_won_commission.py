@@ -647,6 +647,9 @@ def build_ae_closed_won_commission(
         )
         inv_merged = inv_merged.join(inv_totals, on="opportunity_id")
 
+        # First invoice date per opportunity — multi-year ACV booked here in full
+        first_inv_period = inv_merged.groupby("opportunity_id")["Period_ts"].min()
+
         for _, r in inv_merged.iterrows():
             period_ts  = r["Period_ts"]
             invoice_dt = r["Date_ts"] if pd.notna(r["Date_ts"]) else period_ts
@@ -674,10 +677,12 @@ def build_ae_closed_won_commission(
             if total_eur_inv != 0 and deal_acv_fy > 0:
                 proportion = amount_eur_inv / total_eur_inv
                 commission_acv_fy = deal_acv_fy * proportion
-                commission_acv_my = deal_acv_my * proportion
             else:
                 commission_acv_fy = amount_eur_inv
-                commission_acv_my = 0.0
+
+            # Multi-year ACV commission paid in full on the first invoice only
+            is_first = (period_ts == first_inv_period.get(r["opportunity_id"]))
+            commission_acv_my = deal_acv_my if is_first else 0.0
 
             rows.append({
                 "employee_id":       r["employee_id"],
@@ -709,7 +714,6 @@ def build_ae_closed_won_commission(
         months_between = 12 // n   # months between invoices
 
         acv_fy_per = round(acv_fy / n, 2)
-        acv_my_per = round(acv_my / n, 2)
 
         for i in range(n):
             inv_month = (close_dt + pd.DateOffset(months=months_between * i)).to_period("M").to_timestamp()
@@ -718,7 +722,8 @@ def build_ae_closed_won_commission(
                 "opportunity_id":     r["opportunity_id"],
                 "opportunity_name":   r.get("opportunity_name", r["opportunity_id"]),
                 "acv_eur":            acv_fy_per,
-                "multi_year_acv_eur": acv_my_per,
+                # Multi-year ACV paid in full on the first invoice only
+                "multi_year_acv_eur": round(acv_my, 2) if i == 0 else 0.0,
                 "invoice_date":       inv_month,
                 "month":              inv_month,
                 "close_date":         close_dt,
