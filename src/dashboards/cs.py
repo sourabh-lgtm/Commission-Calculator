@@ -98,13 +98,22 @@ _ROLE_JS = """
 // ============================================================
 
 // Team Lead filter — shared helper used by both individual and workings tabs
+// Riad (UK46) manages the two CS Team Leads (Delphine & Johnny), so when Riad
+// is selected all cs_lead employees are shown regardless of manager_id in Humaans.
+const _RIAD_ID = 'UK46';
+
 function _filterEmpByLead(empSelectId, leadId, onLoad) {
   const el = document.getElementById(empSelectId);
   if (!el) return;
   const prev = el.value;
   el.innerHTML = '';
-  const csEmps = employees.filter(e => e.role === 'cs');
-  const filtered = leadId ? csEmps.filter(e => (e.manager_id || '') === leadId) : csEmps;
+  const csEmps = employees.filter(e => e.role === 'cs' || e.role === 'cs_lead');
+  const filtered = leadId
+    ? csEmps.filter(e =>
+        (e.manager_id || '') === leadId ||
+        (leadId === _RIAD_ID && e.role === 'cs_lead')
+      )
+    : csEmps;
   filtered.forEach(e => {
     const opt = document.createElement('option');
     opt.value = e.employee_id; opt.text = e.name;
