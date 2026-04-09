@@ -79,6 +79,19 @@ def _parse_period(val: str) -> pd.Timestamp | None:
         return None
 
 
+def _cadence_n_invoices(cadence_str) -> int:
+    """Number of invoices per year implied by the Invoicing Cadence field."""
+    c = str(cadence_str).strip().lower()
+    if "month" in c:
+        return 12
+    if "quarter" in c:
+        return 4
+    if "semi" in c or "bi-annual" in c or "biannual" in c or "half" in c:
+        return 2
+    # "yearly in advance", "annual", "upfront", "one-time", blank, etc.
+    return 1
+
+
 def _classify_lead_source(val) -> str | None:
     v = str(val).strip().lower()
     if v.startswith("outbound"):
@@ -452,7 +465,7 @@ def _empty_ae_df() -> pd.DataFrame:
     return pd.DataFrame(columns=[
         "employee_id", "opportunity_id", "opportunity_name", "acv_eur",
         "multi_year_acv_eur", "invoice_date", "month", "close_date",
-        "is_forecast", "document_number", "invoice_currency",
+        "is_forecast", "document_number", "invoice_currency", "invoicing_cadence",
     ])
 
 
@@ -531,8 +544,9 @@ def build_ae_closed_won_commission(
     # ------------------------------------------------------------------
     # 3. Build opportunity-level summary
     # ------------------------------------------------------------------
+    has_cadence = "Invoicing Cadence" in raw.columns
     opp_cols = ["Opportunity Id Casesafe", "Opportunity Name", "Opportunity Owner",
-                "Lead Source", "Close Date"]
+                "Lead Source", "Close Date"] + (["Invoicing Cadence"] if has_cadence else [])
     opps = (
         raw[opp_cols]
         .drop_duplicates(subset=["Opportunity Id Casesafe"])
@@ -543,6 +557,14 @@ def build_ae_closed_won_commission(
         opps["Close Date"].astype(str).str.strip(), format="%d/%m/%Y", errors="coerce"
     )
     opps = opps.dropna(subset=["close_date"])
+
+    # Exclude deals closed in 2025 or before — tracked separately
+    opps = opps[opps["close_date"].dt.year >= 2026].copy()
+    if opps.empty:
+        print("[AE CW] No 2026+ Closed Won deals found")
+        return _empty_ae_df()
+
+    opps["invoicing_cadence"] = opps["Invoicing Cadence"].astype(str) if has_cadence else "yearly in advance"
 
     opps["opportunity_id"]   = opps["Opportunity Id Casesafe"].astype(str).str.strip()
     opps["opportunity_name"] = (
@@ -612,7 +634,7 @@ def build_ae_closed_won_commission(
     if not inv.empty:
         inv_merged = inv.merge(
             opps[["opportunity_id", "opportunity_name", "employee_id",
-                  "acv_eur", "multi_year_acv_eur", "close_date"]],
+                  "acv_eur", "multi_year_acv_eur", "close_date", "invoicing_cadence"]],
             left_on="External ID",
             right_on="opportunity_id",
             how="inner",
@@ -669,30 +691,43 @@ def build_ae_closed_won_commission(
                 "is_forecast":       False,
                 "document_number":   str(r.get("Document Number", "")).strip(),
                 "invoice_currency":  inv_currency,
+                "invoicing_cadence": r.get("invoicing_cadence", ""),
             })
 
     # ------------------------------------------------------------------
-    # 6b. UNMATCHED deals: forecast rows
+    # 6b. UNMATCHED deals: forecast rows, split by invoicing cadence
     # ------------------------------------------------------------------
     unmatched = opps[~opps["opportunity_id"].isin(matched_opp_ids)]
     forecast_count = 0
 
     for _, r in unmatched.iterrows():
-        close_dt = r["close_date"]
-        rows.append({
-            "employee_id":        r["employee_id"],
-            "opportunity_id":     r["opportunity_id"],
-            "opportunity_name":   r.get("opportunity_name", r["opportunity_id"]),
-            "acv_eur":            round(float(r["acv_eur"]), 2),
-            "multi_year_acv_eur": round(float(r["multi_year_acv_eur"]), 2),
-            "invoice_date":       close_dt,
-            "month":              close_dt.to_period("M").to_timestamp(),
-            "close_date":         close_dt,
-            "is_forecast":        True,
-            "document_number":    "",
-            "invoice_currency":   "EUR",
-        })
-        forecast_count += 1
+        close_dt  = r["close_date"]
+        acv_fy    = float(r["acv_eur"])
+        acv_my    = float(r["multi_year_acv_eur"])
+        cadence   = r.get("invoicing_cadence", "yearly in advance")
+        n         = _cadence_n_invoices(cadence)
+        months_between = 12 // n   # months between invoices
+
+        acv_fy_per = round(acv_fy / n, 2)
+        acv_my_per = round(acv_my / n, 2)
+
+        for i in range(n):
+            inv_month = (close_dt + pd.DateOffset(months=months_between * i)).to_period("M").to_timestamp()
+            rows.append({
+                "employee_id":        r["employee_id"],
+                "opportunity_id":     r["opportunity_id"],
+                "opportunity_name":   r.get("opportunity_name", r["opportunity_id"]),
+                "acv_eur":            acv_fy_per,
+                "multi_year_acv_eur": acv_my_per,
+                "invoice_date":       inv_month,
+                "month":              inv_month,
+                "close_date":         close_dt,
+                "is_forecast":        True,
+                "document_number":    "",
+                "invoice_currency":   "EUR",
+                "invoicing_cadence":  cadence,
+            })
+            forecast_count += 1
 
     actual_count = len(rows) - forecast_count
     print(f"[AE CW] Invoice rows: {actual_count}, Forecast rows: {forecast_count}")

@@ -331,7 +331,7 @@ async function loadWorkings() {
       kpiCard('Base Commission (10%)', fmtAmt(totalBaseC, cur), 'Year-end payment') +
       (totalMyC > 0 ? kpiCard('Multi-yr Commission (1%)', fmtAmt(totalMyC, cur), 'Year-end payment') : '');
 
-    const heads = ['Date','Opportunity','Doc #','1st-yr ACV (EUR)','Multi-yr ACV (EUR)','FX','Base Comm (10%)','Multi-yr Comm (1%)','Total'];
+    const heads = ['Date','Opportunity','Doc #','Cadence','1st-yr ACV (EUR)','Multi-yr ACV (EUR)','FX','Base Comm (10%)','Multi-yr Comm (1%)','Total'];
     const rowData = rows.map(r => {
       const baseC  = r.base_commission || 0;
       const myC    = r.my_commission   || 0;
@@ -340,10 +340,12 @@ async function loadWorkings() {
       const fmt = v => isFcst
         ? '<span style="color:var(--dim)">' + fmtAmt(v, cur) + ' (fcst)</span>'
         : '<strong>' + fmtAmt(v, cur) + '</strong>';
+      const cadence = r.invoicing_cadence || '';
       return [
         r.date || '',
         r.opportunity_name || r.opportunity_id || '',
         r.document_number  || '',
+        cadence ? '<span style="font-size:11px;color:var(--dim)">' + cadence + '</span>' : '\u2014',
         '\u20ac' + fmtNum(r.acv_eur || 0),
         (r.multi_year_acv_eur||0) > 0 ? '\u20ac' + fmtNum(r.multi_year_acv_eur) : '\u2014',
         r.fx_rate ? r.fx_rate.toFixed(4) : '1.0000',
@@ -355,7 +357,7 @@ async function loadWorkings() {
 
     if (!rowData.length) {
       document.getElementById('wk-table').innerHTML =
-        '<tr><td colspan="9" style="color:var(--dim);padding:12px">No deals invoiced this month. Commission is paid as a year-end lump sum in December.</td></tr>';
+        '<tr><td colspan="10" style="color:var(--dim);padding:12px">No deals invoiced this month. Commission is paid as a year-end lump sum in December.</td></tr>';
     } else {
       renderTable('wk-table', heads, rowData);
     }

@@ -303,19 +303,20 @@ class AECommissionPlan(BaseCommissionPlan):
                 label += " (forecast)"
 
             rows.append({
-                "type":              row_type,
-                "date":              date_str,
-                "opportunity_id":    r["opportunity_id"],
-                "opportunity_name":  opp_name,
-                "document_number":   doc_num,
-                "acv_eur":           round(acv_fy, 2),
+                "type":               row_type,
+                "date":               date_str,
+                "opportunity_id":     r["opportunity_id"],
+                "opportunity_name":   opp_name,
+                "document_number":    doc_num,
+                "acv_eur":            round(acv_fy, 2),
                 "multi_year_acv_eur": round(acv_my, 2),
-                "fx_rate":           fx_rate,
-                "rate_desc":         label,
-                "base_commission":   round(acv_fy * BASE_RATE * fx_rate, 2),
-                "my_commission":     round(acv_my * MULTI_YEAR_RATE * fx_rate, 2),
-                "currency":          currency,
-                "is_forecast":       is_forecast,
+                "fx_rate":            fx_rate,
+                "rate_desc":          label,
+                "base_commission":    round(acv_fy * BASE_RATE * fx_rate, 2),
+                "my_commission":      round(acv_my * MULTI_YEAR_RATE * fx_rate, 2),
+                "currency":           currency,
+                "is_forecast":        is_forecast,
+                "invoicing_cadence":  str(r.get("invoicing_cadence", "")),
             })
 
         return rows
