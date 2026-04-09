@@ -4,6 +4,8 @@ from src.dashboards.base import assemble_html
 _NAV_LINKS = """
     <div class="nav-section">Team</div>
     <div class="tab active" onclick="showTab('ae-overview')">Team Overview</div>
+    <div class="tab" onclick="showTab('ae-monthly')">Monthly Performance</div>
+    <div class="tab" onclick="showTab('ae-quarterly')">Quarterly Performance</div>
     <div class="tab" onclick="showTab('ae-annual')">Annual Summary</div>
     <div class="nav-section">Individual</div>
     <div class="tab" onclick="showTab('ae-detail')">AE Detail</div>
@@ -33,6 +35,51 @@ _TABS_HTML = """
   <div class="panel">
     <h3>AE Breakdown</h3>
     <div class="tbl-wrap"><table id="ae-to-table"></table></div>
+  </div>
+</div>
+
+<!-- ============================================================ AE MONTHLY PERFORMANCE -->
+<div id="tab-ae-monthly" class="tab-content">
+  <div class="page-title">Monthly Performance</div>
+  <p class="page-sub">ACV closed per AE for the selected month</p>
+  <div class="controls">
+    <button class="btn" onclick="exportCSV('ae-monthly')">Export CSV</button>
+  </div>
+  <div class="kpi-grid" id="ae-mo-kpis"></div>
+  <div class="panel">
+    <h3>ACV by AE</h3>
+    <canvas id="ae-chart-mo" height="120"></canvas>
+  </div>
+  <div class="panel">
+    <h3>Monthly Breakdown</h3>
+    <div class="tbl-wrap"><table id="ae-mo-table"></table></div>
+  </div>
+</div>
+
+<!-- ============================================================ AE QUARTERLY PERFORMANCE -->
+<div id="tab-ae-quarterly" class="tab-content">
+  <div class="page-title">Quarterly Performance</div>
+  <p class="page-sub">ACV vs target and gate status by quarter</p>
+  <div class="controls">
+    <label>Year</label>
+    <select id="ae-q-year" onchange="loadAEQuarterly()"></select>
+    <label>Quarter</label>
+    <select id="ae-q-quarter" onchange="loadAEQuarterly()">
+      <option value="1">Q1</option>
+      <option value="2">Q2</option>
+      <option value="3">Q3</option>
+      <option value="4">Q4</option>
+    </select>
+    <button class="btn" onclick="exportCSV('ae-quarterly')">Export CSV</button>
+  </div>
+  <div class="kpi-grid" id="ae-q-kpis"></div>
+  <div class="panel">
+    <h3>ACV Progress to Target</h3>
+    <div id="ae-q-progress"></div>
+  </div>
+  <div class="panel">
+    <h3>Quarterly Breakdown</h3>
+    <div class="tbl-wrap"><table id="ae-q-table"></table></div>
   </div>
 </div>
 
@@ -80,7 +127,7 @@ async function onRoleInit() {
   const curYr = new Date().getFullYear();
 
   // Populate year selectors
-  ['ae-year', 'ae-ann-year', 'ae-det-year', 'ps-year', 'ac-year'].forEach(id => {
+  ['ae-year', 'ae-ann-year', 'ae-det-year', 'ae-q-year', 'ps-year', 'ac-year'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     [curYr - 1, curYr, curYr + 1].forEach(y => {
@@ -91,30 +138,21 @@ async function onRoleInit() {
     });
   });
 
+  // Set default quarter
+  const curQ = Math.ceil((new Date().getMonth() + 1) / 3);
+  const qEl = document.getElementById('ae-q-quarter');
+  if (qEl) qEl.value = curQ;
+
   // Populate AE employee dropdown
   rebuildEmpDropdowns();
 
   showTab('ae-overview');
 }
 
-function rebuildEmpDropdowns() {
-  const aeEmps = employees.filter(e => e.role === 'ae');
-  ['ae-emp', 'wk-emp'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const prev = el.value;
-    el.innerHTML = '';
-    aeEmps.forEach(e => {
-      const opt = document.createElement('option');
-      opt.value = e.employee_id; opt.text = e.name;
-      el.appendChild(opt);
-    });
-    if (aeEmps.some(e => e.employee_id === prev)) el.value = prev;
-  });
-}
-
 function loadTab(name) {
   if (name === 'ae-overview')       loadAEOverview();
+  else if (name === 'ae-monthly')    loadAEMonthly();
+  else if (name === 'ae-quarterly')  loadAEQuarterly();
   else if (name === 'ae-annual')    loadAEAnnual();
   else if (name === 'ae-detail')    loadAEDetail();
   else if (name === 'workings')     loadWorkings();
@@ -272,6 +310,119 @@ async function loadAEDetail() {
     ];
   });
   renderTable('ae-det-table', heads, rows);
+}
+
+// ============================================================
+// AE Monthly Performance
+// ============================================================
+async function loadAEMonthly() {
+  const month = document.getElementById('global-month').value;
+  if (!month) return;
+  const yr = month.substring(0, 4);
+  const res = await fetch('/api/ae_monthly?year=' + yr);
+  const data = await res.json();
+  const {employees: emps, months, month_labels} = data;
+
+  // Filter to selected month
+  const mKey = month.substring(0, 7); // "2026-01"
+  const mIdx = months.indexOf(mKey);
+
+  const activeEmps = emps.filter(e => (e.monthly_acv_eur[mKey] || 0) > 0 || true);
+
+  // KPIs
+  const totalAcv = activeEmps.reduce((s,e) => s + (e.monthly_acv_eur[mKey]||0), 0);
+  const totalAcvMy = activeEmps.reduce((s,e) => s + (e.monthly_acv_my_eur[mKey]||0), 0);
+  const withDeals = activeEmps.filter(e => (e.monthly_acv_eur[mKey]||0) > 0).length;
+  document.getElementById('ae-mo-kpis').innerHTML =
+    kpiCard('1st-year ACV', '\u20ac' + fmtNum(totalAcv), fmtMonth(month)) +
+    kpiCard('Multi-year ACV', '\u20ac' + fmtNum(totalAcvMy), 'Incremental TCV') +
+    kpiCard('AEs with Deals', withDeals, fmtMonth(month));
+
+  // Bar chart
+  const labels = activeEmps.map(e => e.name.split(' ')[0]);
+  renderBar('ae-chart-mo', labels, activeEmps.map(e => e.monthly_acv_eur[mKey]||0), '1st-yr ACV (EUR)');
+
+  // Table
+  const heads = ['Name', 'Region', 'Cur', '1st-yr ACV (EUR)', 'Multi-yr ACV (EUR)', 'Total ACV (EUR)', 'Gate Status'];
+  const rows = activeEmps.map(e => {
+    const acv   = e.monthly_acv_eur[mKey]  || 0;
+    const acvMy = e.monthly_acv_my_eur[mKey] || 0;
+    // Gate check: ACV this month vs monthly portion of quarterly target (q_target / 3)
+    // We show gate vs quarterly target on the quarterly tab; here just show raw ACV
+    return [
+      e.name, e.region, e.currency,
+      '\u20ac' + fmtNum(acv),
+      acvMy > 0 ? '\u20ac' + fmtNum(acvMy) : '\u2014',
+      '<strong>\u20ac' + fmtNum(acv + acvMy) + '</strong>',
+      acv > 0 ? '<span style="color:var(--green)">Active</span>' : '<span style="color:var(--dim)">\u2014</span>',
+    ];
+  });
+  renderTable('ae-mo-table', heads, rows);
+}
+
+// ============================================================
+// AE Quarterly Performance
+// ============================================================
+async function loadAEQuarterly() {
+  const yr = document.getElementById('ae-q-year').value;
+  const qt = parseInt(document.getElementById('ae-q-quarter').value);
+  const res = await fetch('/api/ae_overview?year=' + yr);
+  const data = await res.json();
+  const {employees: emps} = data;
+
+  const qAcvKey  = 'q' + qt + '_acv';
+  const qGateKey = 'q' + qt + '_gate';
+
+  const totalAcv  = emps.reduce((s,e) => s + (e[qAcvKey]||0), 0);
+  const gatesMet  = emps.filter(e => e[qGateKey]).length;
+  const avgAtt    = emps.length ? (emps.reduce((s,e) => {
+    const t = (e.annual_target_eur||0) / 4;
+    return s + (t > 0 ? (e[qAcvKey]||0) / t * 100 : 0);
+  }, 0) / emps.length) : 0;
+
+  document.getElementById('ae-q-kpis').innerHTML =
+    kpiCard('Q' + qt + ' Total ACV', '\u20ac' + fmtNum(totalAcv), 'FY' + yr) +
+    kpiCard('Gates Met', gatesMet + ' / ' + emps.length, '\u2265 50% of quarterly target') +
+    kpiCard('Avg Attainment', avgAtt.toFixed(1) + '%', 'vs quarterly target');
+
+  // Progress bars
+  const prog = document.getElementById('ae-q-progress');
+  prog.innerHTML = emps.map(e => {
+    const qTarget = (e.annual_target_eur || 0) / 4;
+    const acv     = e[qAcvKey] || 0;
+    const pct     = qTarget > 0 ? Math.min(150, (acv / qTarget) * 100) : 0;
+    const gateMet = e[qGateKey];
+    const barCol  = gateMet ? 'var(--green)' : pct >= 30 ? 'var(--accent)' : 'var(--red)';
+    return '<div style="margin-bottom:14px">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:4px">' +
+        '<span style="font-size:13px;font-weight:600">' + e.name + '</span>' +
+        '<span style="font-size:12px;color:var(--dim)">\u20ac' + fmtNum(acv) + ' / \u20ac' + fmtNum(qTarget) +
+          (gateMet ? ' <span style="color:var(--green);font-weight:700">\u2713 Gate Met</span>' : ' <span style="color:var(--red);font-weight:600">\u2717 Gate Not Met</span>') +
+        '</span>' +
+      '</div>' +
+      '<div style="background:var(--border);border-radius:10px;height:14px;position:relative">' +
+        '<div style="background:' + barCol + ';width:' + Math.min(100,pct) + '%;height:14px;border-radius:10px"></div>' +
+        '<div style="position:absolute;top:0;left:50%;height:14px;width:2px;background:var(--dim);opacity:.5"></div>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+
+  // Table
+  const heads = ['Name', 'Region', 'Cur', 'Q' + qt + ' ACV (EUR)', 'Q Target (EUR)', 'Attainment', 'Gate'];
+  const rows = emps.map(e => {
+    const qTarget = (e.annual_target_eur || 0) / 4;
+    const acv     = e[qAcvKey] || 0;
+    const att     = qTarget > 0 ? (acv / qTarget * 100).toFixed(1) : '0.0';
+    const attColor = parseFloat(att) >= 100 ? 'var(--green)' : parseFloat(att) >= 50 ? 'var(--orange)' : 'var(--red)';
+    return [
+      e.name, e.region, e.currency,
+      '\u20ac' + fmtNum(acv),
+      '\u20ac' + fmtNum(qTarget),
+      '<span style="color:' + attColor + ';font-weight:600">' + att + '%</span>',
+      gateIcon(e[qGateKey]),
+    ];
+  });
+  renderTable('ae-q-table', heads, rows);
 }
 
 // ============================================================

@@ -225,7 +225,7 @@ function filterByRole(arr) {
 
 function rebuildEmpDropdowns() {
   const filtered = filterByRole(employees);
-  ['sd-emp','wk-emp'].forEach(id => {
+  ['sd-emp','ae-emp','wk-emp'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     const prev = el.value;
@@ -313,6 +313,52 @@ async function loadWorkings() {
       ];
     });
     renderTable('wk-table', heads, rowData);
+    return;
+  }
+
+  // ---- AE (Account Executive) ----
+  if (globalRole() === 'ae') {
+    const kpiEl = document.getElementById('wk-kpis');
+    const invoicedRows = rows.filter(r => !r.is_forecast);
+    const totalAcvFY  = rows.reduce((s,r) => s + (r.acv_eur||0), 0);
+    const totalAcvMY  = rows.reduce((s,r) => s + (r.multi_year_acv_eur||0), 0);
+    const totalBaseC  = invoicedRows.reduce((s,r) => s + (r.base_commission||0), 0);
+    const totalMyC    = invoicedRows.reduce((s,r) => s + (r.my_commission||0), 0);
+
+    kpiEl.innerHTML =
+      kpiCard('1st-year ACV', '\u20ac' + fmtNum(totalAcvFY), fmtMonth(month)) +
+      kpiCard('Multi-year ACV', '\u20ac' + fmtNum(totalAcvMY), 'Incremental TCV') +
+      kpiCard('Base Commission (10%)', fmtAmt(totalBaseC, cur), 'Year-end payment') +
+      (totalMyC > 0 ? kpiCard('Multi-yr Commission (1%)', fmtAmt(totalMyC, cur), 'Year-end payment') : '');
+
+    const heads = ['Date','Opportunity','Doc #','1st-yr ACV (EUR)','Multi-yr ACV (EUR)','FX','Base Comm (10%)','Multi-yr Comm (1%)','Total'];
+    const rowData = rows.map(r => {
+      const baseC  = r.base_commission || 0;
+      const myC    = r.my_commission   || 0;
+      const total  = baseC + myC;
+      const isFcst = r.is_forecast;
+      const fmt = v => isFcst
+        ? '<span style="color:var(--dim)">' + fmtAmt(v, cur) + ' (fcst)</span>'
+        : '<strong>' + fmtAmt(v, cur) + '</strong>';
+      return [
+        r.date || '',
+        r.opportunity_name || r.opportunity_id || '',
+        r.document_number  || '',
+        '\u20ac' + fmtNum(r.acv_eur || 0),
+        (r.multi_year_acv_eur||0) > 0 ? '\u20ac' + fmtNum(r.multi_year_acv_eur) : '\u2014',
+        r.fx_rate ? r.fx_rate.toFixed(4) : '1.0000',
+        fmt(baseC),
+        myC > 0 ? fmt(myC) : '\u2014',
+        fmt(total),
+      ];
+    });
+
+    if (!rowData.length) {
+      document.getElementById('wk-table').innerHTML =
+        '<tr><td colspan="9" style="color:var(--dim);padding:12px">No deals invoiced this month. Commission is paid as a year-end lump sum in December.</td></tr>';
+    } else {
+      renderTable('wk-table', heads, rowData);
+    }
     return;
   }
 

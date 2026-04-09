@@ -22,7 +22,7 @@ from src.reports import (
     employee_list, available_months,
     payroll_summary, accrual_summary,
     cs_overview, cs_quarterly,
-    ae_overview, ae_detail,
+    ae_overview, ae_detail, ae_monthly,
 )
 from src.approval_state import ApprovalState
 from src.helpers import clean_json
@@ -254,6 +254,11 @@ class Handler(BaseHTTPRequestHandler):
             emp_id = _p("employee_id", "")
             yr = int(_p("year", pd.Timestamp.now().year))
             self._respond(ae_detail(MODEL, emp_id, yr))
+            return
+
+        if path == "/api/ae_monthly":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            self._respond(ae_monthly(MODEL, yr))
             return
 
         self._respond({"error": "Not found"}, 404)

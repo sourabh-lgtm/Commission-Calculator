@@ -1,7 +1,7 @@
 """API report builders — called from HTTP handler in launch.py."""
 
 import pandas as pd
-from src.helpers import df_to_records, month_to_quarter, quarter_months
+from src.helpers import df_to_records, month_to_quarter, quarter_months, get_fx_rate
 from src.commission_plans import get_plan
 
 
@@ -435,13 +435,22 @@ def accrual_summary(model, year: int) -> dict:
             if not t.empty:
                 annual_target_eur = float(t["annual_target_eur"].iloc[0])
 
-        # Monthly accrual = annual_target_eur × 10% / 12
-        monthly_accrual = round(annual_target_eur * 0.10 / 12, 2)
-        monthly = {m.strftime("%Y-%m"): monthly_accrual for m in year_months}
+        # Monthly accrual in EUR, then convert to local currency using FX rate for that month
+        monthly_accrual_eur = annual_target_eur * 0.10 / 12
+        fx_rates_df = cs_perf.get("fx_rates", pd.DataFrame()) if cs_perf else pd.DataFrame()
+        monthly = {}
+        for m in year_months:
+            if currency == "EUR":
+                fx = 1.0
+            elif not fx_rates_df.empty:
+                fx = get_fx_rate(fx_rates_df, m, currency)
+            else:
+                fx = 1.0
+            monthly[m.strftime("%Y-%m")] = round(monthly_accrual_eur * fx, 2)
 
         q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         for m in year_months:
-            q_totals[_q(m)] += monthly_accrual
+            q_totals[_q(m)] += monthly[m.strftime("%Y-%m")]
         q_totals = {k: round(v, 2) for k, v in q_totals.items()}
         total = round(sum(monthly.values()), 2)
 
@@ -827,6 +836,69 @@ def ae_detail(model, employee_id: str, year: int) -> dict:
         "quarters": quarters_out,
         "year_end": year_end,
         "year":     year,
+    }
+
+
+# ---------------------------------------------------------------------------
+# AE Monthly breakdown — per-AE monthly ACV for the full year
+# ---------------------------------------------------------------------------
+
+def ae_monthly(model, year: int) -> dict:
+    """Per-AE monthly ACV breakdown for the full year."""
+    all_months  = sorted(model.active_months)
+    year_months = [m for m in all_months if m.year == year]
+
+    cs_perf    = getattr(model, "cs_performance", None)
+    ae_cw      = cs_perf.get("ae_closed_won", pd.DataFrame()) if cs_perf else pd.DataFrame()
+    targets_df = cs_perf.get("ae_targets", pd.DataFrame()) if cs_perf else pd.DataFrame()
+
+    month_keys   = [m.strftime("%Y-%m") for m in year_months]
+    month_labels = [m.strftime("%b-%y") for m in year_months]
+
+    employees_out = []
+    for _, emp in model.employees[model.employees["role"] == "ae"].iterrows():
+        emp_id   = emp["employee_id"]
+        currency = emp["currency"]
+
+        q_target_eur = 0.0
+        if not targets_df.empty:
+            mask = (
+                (targets_df["employee_id"].astype(str) == str(emp_id)) &
+                (targets_df["year"].astype(int) == int(year))
+            )
+            t = targets_df[mask]
+            if not t.empty:
+                q_target_eur = float(t["quarterly_target_eur"].iloc[0])
+
+        monthly_acv_eur    = {}
+        monthly_acv_my_eur = {}
+        for m in year_months:
+            mk = m.strftime("%Y-%m")
+            if not ae_cw.empty:
+                m_data = ae_cw[(ae_cw["employee_id"] == emp_id) & (ae_cw["month"] == m)]
+                monthly_acv_eur[mk]    = round(float(m_data["acv_eur"].sum()), 2)
+                monthly_acv_my_eur[mk] = round(
+                    float(m_data["multi_year_acv_eur"].sum()) if "multi_year_acv_eur" in m_data.columns else 0.0, 2
+                )
+            else:
+                monthly_acv_eur[mk]    = 0.0
+                monthly_acv_my_eur[mk] = 0.0
+
+        employees_out.append({
+            "employee_id":       str(emp_id),
+            "name":              emp["name"],
+            "currency":          currency,
+            "region":            emp["region"],
+            "q_target_eur":      q_target_eur,
+            "monthly_acv_eur":   monthly_acv_eur,
+            "monthly_acv_my_eur": monthly_acv_my_eur,
+        })
+
+    return {
+        "months":       month_keys,
+        "month_labels": month_labels,
+        "employees":    employees_out,
+        "year":         year,
     }
 
 
