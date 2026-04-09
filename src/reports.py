@@ -94,6 +94,17 @@ def sdr_detail(model, employee_id: str, month: pd.Timestamp | None = None) -> di
             "total_commission":          r.get("total_commission", 0),
             "attainment_pct":            r.get("attainment_pct", 0),
             "currency":                  r.get("currency", ""),
+            # CS / CS Lead specific fields (0 for non-CS roles)
+            "nrr_pct":                   r.get("nrr_pct", 0),
+            "nrr_bonus":                 r.get("nrr_bonus", 0),
+            "csat_score_pct":            r.get("csat_score_pct", 0),
+            "csat_bonus":                r.get("csat_bonus", 0),
+            "credits_used_pct":          r.get("credits_used_pct", 0),
+            "credits_bonus":             r.get("credits_bonus", 0),
+            "multi_year_comm":           r.get("multi_year_comm", 0),
+            "referral_sao_count":        r.get("referral_sao_count", 0),
+            "referral_sao_comm":         r.get("referral_sao_comm", 0),
+            "referral_cw_comm":          r.get("referral_cw_comm", 0),
         })
 
     ytd_total = float(df["total_commission"].sum())
@@ -178,7 +189,7 @@ def commission_workings(model, employee_id: str, month: pd.Timestamp) -> dict:
 
     plan = plan_cls()
     cs_perf = getattr(model, "cs_performance", None)
-    if emp["role"] == "cs" and cs_perf:
+    if emp["role"] in ("cs", "cs_lead") and cs_perf:
         rows = plan.get_workings_rows(
             emp, month,
             model.sdr_activities,
@@ -357,13 +368,14 @@ def accrual_summary(model, year: int) -> dict:
                 "total":   round(total * 0.31, 2),
             })
 
-    # ---- CS employees: accrual = full potential (salary × 15%), not actual bonus ----
-    cs_employees = model.employees[model.employees["role"] == "cs"].copy()
+    # ---- CS / CS Lead employees: accrual = full potential (salary × 15% or 20%) ----
+    cs_employees = model.employees[model.employees["role"].isin(["cs", "cs_lead"])].copy()
     for _, emp in cs_employees.iterrows():
-        emp_id   = emp["employee_id"]
-        region   = emp["region"]
-        currency = emp["currency"]
-        sal_hist = model.salary_history[model.salary_history["employee_id"] == emp_id]
+        emp_id    = emp["employee_id"]
+        region    = emp["region"]
+        currency  = emp["currency"]
+        bonus_pct = 0.20 if emp["role"] == "cs_lead" else 0.15
+        sal_hist  = model.salary_history[model.salary_history["employee_id"] == emp_id]
 
         monthly = {}
         for m in year_months:
@@ -372,7 +384,7 @@ def accrual_summary(model, year: int) -> dict:
                 .sort_values("effective_date", ascending=False)
             )
             sal_monthly = float(eligible["salary_monthly"].iloc[0]) if not eligible.empty else 0.0
-            monthly[m.strftime("%Y-%m")] = round(sal_monthly * 0.15, 2)
+            monthly[m.strftime("%Y-%m")] = round(sal_monthly * bonus_pct, 2)
 
         q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         for m in year_months:
@@ -390,7 +402,12 @@ def accrual_summary(model, year: int) -> dict:
             "q3": q_totals[3], "q4": q_totals[4],
             "total":            total,
         }
-        regions.setdefault(region, []).append({**base, "type": "CS Bonus Accrual (full potential)"})
+        accrual_label = (
+            f"CS Lead Bonus Accrual (full potential, 20%)"
+            if emp["role"] == "cs_lead"
+            else "CS Bonus Accrual (full potential)"
+        )
+        regions.setdefault(region, []).append({**base, "type": accrual_label})
 
         if region == "UK":
             ni_monthly = {k: round(v * 0.138, 2) for k, v in monthly.items()}
@@ -518,13 +535,10 @@ def cs_overview(model, month: pd.Timestamp) -> dict:
     if model.commission_detail.empty:
         return {"employees": [], "kpis": {"total_bonus_eur": 0, "avg_nrr_pct": 0, "avg_csat_pct": 0, "num_active": 0}}
 
+    cs_ids = set(model.employees[model.employees["role"].isin(["cs", "cs_lead"])]["employee_id"])
     df = model.commission_detail[
         (model.commission_detail["month"] == month) &
-        (model.commission_detail.get("role", pd.Series(dtype=str)) == "cs"
-         if "role" in model.commission_detail.columns
-         else model.commission_detail["employee_id"].isin(
-             model.employees[model.employees["role"] == "cs"]["employee_id"]
-         ))
+        model.commission_detail["employee_id"].isin(cs_ids)
     ].copy()
 
     if not df.empty:
@@ -534,7 +548,8 @@ def cs_overview(model, month: pd.Timestamp) -> dict:
 
     _cs_cols = ["nrr_pct", "nrr_bonus", "csat_score_pct", "csat_bonus",
                 "credits_used_pct", "credits_bonus", "quarterly_bonus_target",
-                "referral_sao_count", "referral_sao_comm", "referral_cw_comm"]
+                "referral_sao_count", "referral_sao_comm", "referral_cw_comm",
+                "multi_year_comm"]
 
     employees = []
     for _, row in df.iterrows():
@@ -578,7 +593,7 @@ def cs_quarterly(model, year: int, quarter: int) -> dict:
     if model.commission_detail.empty:
         return {"employees": [], "year": year, "quarter": quarter}
 
-    cs_ids = set(model.employees[model.employees["role"] == "cs"]["employee_id"])
+    cs_ids = set(model.employees[model.employees["role"].isin(["cs", "cs_lead"])]["employee_id"])
     df = model.commission_detail[
         model.commission_detail["month"].isin(months) &
         model.commission_detail["employee_id"].isin(cs_ids)

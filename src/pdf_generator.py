@@ -65,7 +65,7 @@ def generate_statement(
     # ------------------------------------------------------------------
     # PAGE 2 — Summary  (role-specific)
     # ------------------------------------------------------------------
-    if role == "cs":
+    if role in ("cs", "cs_lead"):
         story.extend(_cs_summary_page(employee, period_label, summary, currency))
     elif role == "ae":
         story.extend(_ae_summary_page(employee, period_label, summary, accelerator, currency))
@@ -76,7 +76,7 @@ def generate_statement(
     # ------------------------------------------------------------------
     # PAGE 3+ — Full Workings  (role-specific)
     # ------------------------------------------------------------------
-    if role == "cs":
+    if role in ("cs", "cs_lead"):
         story.extend(_cs_workings_page(employee, period_label, workings_rows, summary, currency))
     elif role == "ae":
         story.extend(_ae_workings_page(employee, period_label, workings_rows, accelerator, currency))
@@ -407,6 +407,12 @@ def _cs_summary_page(employee, period_label, summary, currency):
         except Exception:
             return "—"
 
+    is_lead          = employee.get("role") == "cs_lead"
+    bonus_pct_label  = "20%" if is_lead else "15%"
+    nrr_label        = "Team NRR (50% weight)" if is_lead else "NRR (50% weight)"
+    csat_label       = "Team CSAT (35% weight)" if is_lead else "CSAT (35% weight)"
+    credits_label    = "Team Credits (15% weight)" if is_lead else "Service Credits (15% weight)"
+
     nrr_pct          = float(summary.get("nrr_pct", 0) or 0)
     csat_pct         = float(summary.get("csat_score_pct", 0) or 0)
     credits_pct      = float(summary.get("credits_used_pct", 0) or 0)
@@ -415,6 +421,7 @@ def _cs_summary_page(employee, period_label, summary, currency):
     csat_bonus       = float(summary.get("csat_bonus", 0) or 0)
     credits_bonus    = float(summary.get("credits_bonus", 0) or 0)
     accel_topup      = float(summary.get("accelerator_topup", 0) or 0)
+    multi_year_comm  = float(summary.get("multi_year_comm", 0) or 0)
     ref_sao_count    = int(summary.get("referral_sao_count", 0) or 0)
     ref_sao_comm     = float(summary.get("referral_sao_comm", 0) or 0)
     ref_cw_comm      = float(summary.get("referral_cw_comm", 0) or 0)
@@ -452,15 +459,19 @@ def _cs_summary_page(employee, period_label, summary, currency):
 
     if is_q_end:
         rows += [
-            ["Quarterly Bonus Target", "—", "15% × annual salary ÷ 4", _fmt(q_target)],
-            ["NRR (50% weight)", _pct(nrr_pct), nrr_tier, _fmt(nrr_bonus)],
-            ["CSAT (35% weight)", _pct(csat_pct), csat_tier, _fmt(csat_bonus)],
-            ["Service Credits (15% weight)", _pct(credits_pct), credits_tier, _fmt(credits_bonus)],
+            ["Quarterly Bonus Target", "—", f"{bonus_pct_label} × annual salary ÷ 4", _fmt(q_target)],
+            [nrr_label, _pct(nrr_pct), nrr_tier, _fmt(nrr_bonus)],
+            [csat_label, _pct(csat_pct), csat_tier, _fmt(csat_bonus)],
+            [credits_label, _pct(credits_pct), credits_tier, _fmt(credits_bonus)],
         ]
         if accel_topup:
             excess = round(nrr_pct - 100, 2) if nrr_pct > 100 else 0
             rows.append(["NRR Accelerator Top-up", f"+{excess:.1f}% above 100%",
                          "+2% of NRR portion per 1% above 100%", _fmt(accel_topup)])
+
+    if multi_year_comm:
+        rows.append(["Multi-year ACV Commission (1%)", "—",
+                     "1% of year-2+ ACV on multi-year renewal deals", _fmt(multi_year_comm)])
 
     if ref_sao_count:
         rows.append(["Referral SAO Commissions",

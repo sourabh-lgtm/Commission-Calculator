@@ -38,7 +38,7 @@ _TABS_HTML = """
 <!-- ============================================================ CS MONTHLY SUMMARY -->
 <div id="tab-cs-monthly" class="tab-content">
   <div class="page-title">Monthly Summary</div>
-  <p class="page-sub">All advisors side-by-side — bonus only appears in quarter-end months (Mar / Jun / Sep / Dec)</p>
+  <p class="page-sub">All advisors &amp; team leads side-by-side — bonus only appears in quarter-end months (Mar / Jun / Sep / Dec)</p>
   <div class="panel">
     <div class="tbl-wrap"><table id="cs-ms-table"></table></div>
   </div>
@@ -203,7 +203,7 @@ async function loadCSOverview() {
   renderBar('cs-chart-bonus', labels, emps.map(e => e.total_commission_eur), 'Total Payout (EUR)');
   renderBar('cs-chart-nrr',   labels, emps.map(e => e.nrr_pct), 'NRR %', '#7c3aed');
 
-  const heads = ['Name','Region','Cur','Q Bonus Target','NRR %','NRR Bonus','CSAT %','CSAT Bonus','Credits %','Credits Bonus','Referrals','Ref Comm','Accel','Total (EUR)'];
+  const heads = ['Name','Region','Cur','Q Bonus Target','NRR %','NRR Bonus','CSAT %','CSAT Bonus','Credits %','Credits Bonus','Multi-yr ACV','Referrals','Ref Comm','Accel','Total (EUR)'];
   const rows = emps.map(e => [
     e.name, e.region, e.currency,
     fmtAmt(e.quarterly_bonus_target, e.currency),
@@ -213,8 +213,9 @@ async function loadCSOverview() {
     fmtAmt(e.csat_bonus, e.currency),
     e.credits_used_pct ? e.credits_used_pct.toFixed(1) + '%' : '\u2014',
     fmtAmt(e.credits_bonus, e.currency),
+    e.multi_year_comm ? fmtAmt(e.multi_year_comm, e.currency) : '\u2014',
     e.referral_sao_count || 0,
-    fmtAmt(e.referral_sao_comm + e.referral_cw_comm, e.currency),
+    fmtAmt((e.referral_sao_comm||0) + (e.referral_cw_comm||0), e.currency),
     fmtAmt(e.accelerator_topup, e.currency),
     '<strong>' + fmtAmt(e.total_commission_eur, 'EUR') + '</strong>',
   ]);
@@ -232,11 +233,12 @@ async function loadCSMonthlySummary() {
 
   const isQEnd = ['03','06','09','12'].includes(month.slice(5,7));
   const heads = isQEnd
-    ? ['Name','Region','Currency','NRR %','NRR Bonus','CSAT %','CSAT Bonus','Credits %','Credits Bonus','NRR Accel','Referral Comm','Total']
-    : ['Name','Region','Currency','Referral SAOs','Referral Comm','Total'];
+    ? ['Name','Region','Currency','NRR %','NRR Bonus','CSAT %','CSAT Bonus','Credits %','Credits Bonus','NRR Accel','Multi-yr ACV','Referral Comm','Total']
+    : ['Name','Region','Currency','Referral SAOs','Multi-yr ACV','Referral Comm','Total'];
 
   const rows = emps.map(e => {
-    const refComm = fmtAmt((e.referral_sao_comm||0) + (e.referral_cw_comm||0), e.currency);
+    const refComm   = fmtAmt((e.referral_sao_comm||0) + (e.referral_cw_comm||0), e.currency);
+    const myAcv     = e.multi_year_comm ? fmtAmt(e.multi_year_comm, e.currency) : '\u2014';
     if (isQEnd) return [
       e.name, e.region, e.currency,
       e.nrr_pct ? e.nrr_pct.toFixed(1) + '%' : '\u2014',
@@ -246,10 +248,11 @@ async function loadCSMonthlySummary() {
       e.credits_used_pct ? e.credits_used_pct.toFixed(1) + '%' : '\u2014',
       fmtAmt(e.credits_bonus, e.currency),
       fmtAmt(e.accelerator_topup, e.currency),
+      myAcv,
       refComm,
       '<strong>' + fmtAmt(e.total_commission, e.currency) + '</strong>',
     ];
-    return [e.name, e.region, e.currency, e.referral_sao_count || 0, refComm,
+    return [e.name, e.region, e.currency, e.referral_sao_count || 0, myAcv, refComm,
       '<strong>' + fmtAmt(e.total_commission, e.currency) + '</strong>'];
   });
   renderTable('cs-ms-table', heads, rows);
@@ -330,13 +333,17 @@ async function loadCSIndividual() {
   renderLine('cs-ind-chart', rows.map(r => r.month), rows.map(r => r.total_commission), 'Total Payout');
 
   // Table — show CS-relevant fields
-  const heads = ['Month','Q','NRR Bonus','CSAT Bonus','Credits Bonus','NRR Accel','Ref Comm','Total'];
+  const isLead = emp.role === 'cs_lead';
+  const heads = ['Month','Q','NRR Bonus','CSAT Bonus','Credits Bonus','NRR Accel',
+    ...(isLead ? ['Multi-yr ACV'] : []),
+    'Ref Comm','Total'];
   const rowData = rows.map(r => [
     r.month, r.quarter,
     fmtAmt(r.nrr_bonus || 0, cur),
     fmtAmt(r.csat_bonus || 0, cur),
     fmtAmt(r.credits_bonus || 0, cur),
     fmtAmt(r.accelerator_topup || 0, cur),
+    ...(isLead ? [fmtAmt(r.multi_year_comm || 0, cur)] : []),
     fmtAmt((r.referral_sao_comm||0) + (r.referral_cw_comm||0), cur),
     '<strong>' + fmtAmt(r.total_commission, cur) + '</strong>',
   ]);
