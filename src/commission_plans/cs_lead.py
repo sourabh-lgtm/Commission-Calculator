@@ -32,7 +32,6 @@ from src.commission_plans.cs import (
     REFERRAL_RATES,
     REFERRAL_CW_RATES,
     MEASURE_WEIGHTS,
-    NRR_TIERS,
     CSAT_MIN_SENT,
     NRR_ACCELERATOR_PER_PCT,
 )
@@ -204,14 +203,14 @@ class CSLeadCommissionPlan(CSACommissionPlan):
                     (nrr_df["quarter"] == quarter)
                 ]
                 if not row.empty:
-                    nrr_pct    = float(row["nrr_pct"].iloc[0])
-                    nrr_target = self._get_nrr_target(emp_id, year, cs_performance)
-                    attainment = (nrr_pct / nrr_target) * 100.0
-                    if attainment > 100.0:
+                    nrr_pct       = float(row["nrr_pct"].iloc[0])
+                    annual_target = self._get_nrr_target(emp_id, year, cs_performance)
+                    q_nrr_target  = self._quarterly_nrr_target(annual_target, quarter)
+                    if nrr_pct > q_nrr_target:
                         sal_monthly       = self._get_salary_monthly(emp_id, q_end, salary_history)
                         q_target          = sal_monthly * 12 * ANNUAL_BONUS_PCT / 4
                         nrr_portion       = q_target * MEASURE_WEIGHTS["nrr"]
-                        pct_above         = attainment - 100.0
+                        pct_above         = (nrr_pct / q_nrr_target) * 100.0 - 100.0
                         accelerator_topup = round(pct_above * NRR_ACCELERATOR_PER_PCT * nrr_portion, 2)
 
         return {
@@ -332,7 +331,10 @@ class CSLeadCommissionPlan(CSACommissionPlan):
                     (nrr_df["quarter"] == quarter)
                 ]
                 if not nrr_row.empty:
-                    nrr_pct = float(nrr_row["nrr_pct"].iloc[0])
+                    nrr_pct       = float(nrr_row["nrr_pct"].iloc[0])
+                    annual_target = self._get_nrr_target(emp_id, year, cs_performance)
+                    q_nrr_target  = self._quarterly_nrr_target(annual_target, quarter)
+                    payout_frac   = self._nrr_payout_fraction(nrr_pct, q_nrr_target, annual_target)
                     rows.append({
                         "type":             "CS Bonus — NRR (50%)",
                         "date":             month.strftime("%Y-%m-%d"),
@@ -342,7 +344,7 @@ class CSLeadCommissionPlan(CSACommissionPlan):
                         "sao_type":         "",
                         "acv_eur":          None,
                         "fx_rate":          None,
-                        "rate_desc":        f"Team NRR {nrr_pct:.1f}% → {self._nrr_payout_fraction(nrr_pct)*100:.0f}% payout (20% salary base)",
+                        "rate_desc":        f"Team NRR {nrr_pct:.1f}% (Q{quarter} target: {q_nrr_target:.1f}%) → {payout_frac*100:.0f}% payout (20% salary base)",
                         "commission":       None,
                         "currency":         currency,
                         "is_forecast":      False,

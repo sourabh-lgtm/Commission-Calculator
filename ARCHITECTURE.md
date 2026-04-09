@@ -1,6 +1,6 @@
 # Commission Calculator — Architecture & Codebase Reference
 
-> Living document for onboarding future Claude sessions. Last updated: 2026-04-09. Changes: cs_lead role (team-aggregate NRR/CSAT/credits, 20% bonus, multi-year ACV), synthetic churn for expired contracts, CSA no-credits default (100% payout), duplicate credits bug fix, one-off services (50% Non-Recurring TCV on Add-Ons in NRR), multi-year ACV gated by CS Opportunity Ownership, churned account credit exclusion (period-specific).
+> Living document for onboarding future Claude sessions. Last updated: 2026-04-09. Changes: quarterly NRR targets (1:1:1:2 weighting from annual target), cs_lead role (team-aggregate NRR/CSAT/credits, 20% bonus, multi-year ACV), synthetic churn for expired contracts, CSA no-credits default (100% payout), duplicate credits bug fix, one-off services (50% Non-Recurring TCV on Add-Ons in NRR), multi-year ACV gated by CS Opportunity Ownership, churned account credit exclusion (period-specific).
 
 ---
 
@@ -252,19 +252,33 @@ Salary comes from `salary_history` (latest effective record at or before the qua
 - Multi-year ACV commission: 1% of multi-year portion of renewal ACV (TCV − flat ACV, or flat ACV × (years − 1)) for renewal deals with contract duration > 12 months **where the Opportunity Owner is a CS employee**. Deals owned by AMs/AEs are excluded even if the account is in the lead's BoB.
 - Referral commissions: same rates as SDR referrals
 
-**NRR payout tiers** (50% weight):
+**NRR targets are per-employee and quarterly-prorated.** Each CSA has an annual NRR target stored in `cs_nrr_targets.csv` (e.g. 96%). The quarterly target is derived using a 1:1:1:2 weighting (Q1–Q3 each get 1 part, Q4 gets 2 parts of the allowed loss budget):
 
-| NRR achieved | Payout |
+```
+allowed_loss   = 100% − annual_target          (e.g. 4% for a 96% target)
+Q1 target      = 100% − allowed_loss × 1/5     (e.g. 99.2%)
+Q2 target      = 100% − allowed_loss × 2/5     (e.g. 98.4%)
+Q3 target      = 100% − allowed_loss × 3/5     (e.g. 97.6%)
+Q4 target      = annual_target                  (e.g. 96.0%)
+```
+
+NRR is still computed YTD (Jan 1 → quarter-end) by `cs_nrr_loader.py`. The quarterly target is only used for payout tier mapping. If no target is set (defaults to 100%), the tier step stays at 2% (original behaviour).
+
+**NRR payout tiers** (50% weight) — thresholds are relative to the quarterly target:
+
+| NRR vs quarterly target | Payout |
 |---|---|
-| < 90% | 0% |
-| 90–91.99% | 50% |
-| 92–93.99% | 60% |
-| 94–95.99% | 70% |
-| 96–97.99% | 80% |
-| 98–99.99% | 90% |
-| ≥ 100% | 100% |
+| ≥ quarterly target | 100% |
+| ≥ target − 1 step | 90% |
+| ≥ target − 2 steps | 80% |
+| ≥ target − 3 steps | 70% |
+| ≥ target − 4 steps | 60% |
+| ≥ target − 5 steps | 50% |
+| < target − 5 steps | 0% |
 
-**NRR accelerator**: For each 1% NRR above 100%, +2% of the NRR portion is added via `calculate_quarterly_accelerator()` and merged as `accelerator_topup`.
+Where `step = annual_target × 2% × quarterly_weight` (e.g. Q1 step = 96% × 2% × 1/5 = 0.384%; Q4 step = 1.92%). Implemented in `CSACommissionPlan._nrr_payout_fraction()` and `_quarterly_nrr_target()` in `cs.py`; inherited by `CSLeadCommissionPlan`.
+
+**NRR accelerator**: For each 1% NRR above the quarterly target, +2% of the NRR portion is added via `calculate_quarterly_accelerator()` and merged as `accelerator_topup`. Accelerator is Q4-only for CSAs; cs_lead runs it for all quarters.
 
 **CSAT payout tiers** (35% weight):
 - Threshold: ≥10 CSATs sent in the quarter (from `cs_csat_sent.csv`), else 0%
@@ -439,7 +453,7 @@ Single HTML page assembled at request time by `build_dashboard_html(role)`. No b
 
 7. **CS CSAT threshold** — if fewer than 10 CSATs are sent in a quarter (`cs_csat_sent.csv`), the entire CSAT measure pays 0 regardless of score. CSAT scores are 0–5 scale, averaged per employee per quarter, converted to 0–100%.
 
-8. **CS NRR accelerator** — if NRR > 100%, an additional `(nrr_pct - 100) × 2% × NRR_portion` is booked as `accelerator_topup` via the quarterly accelerator pass.
+8. **CS NRR quarterly targets** — each quarter has its own NRR target derived from the employee's annual target in `cs_nrr_targets.csv` using a 1:1:1:2 split (Q1 = `100 - loss/5`, Q4 = annual target). NRR is still YTD; only the payout tier threshold shifts each quarter. Tier step = `annual_target × 2% × quarterly_weight`. **CS NRR accelerator** — if NRR exceeds the quarterly target, an additional `(attainment_over_target × 2%) × NRR_portion` is booked as `accelerator_topup` via the quarterly accelerator pass.
 
 9. **Forecast deals show in workings but don't pay** — deals in the pipeline not yet matched to a NetSuite invoice show in the commission workings view with a "Forecast" label but are excluded from `total_commission`.
 
@@ -477,7 +491,7 @@ Single HTML page assembled at request time by `build_dashboard_html(role)`. No b
 | SDR accelerator not triggering | `sdr.py` `calculate_quarterly_accelerator()` — threshold is `QUARTERLY_SAO_TARGET = 9` outbound |
 | Employee missing from dashboard | `humaans_loader.py` `_TITLE_RULES` — check their job title mapping |
 | CS employee missing | Check their Humaans title matches a "climate strategy" pattern in `_TITLE_RULES` |
-| CS bonus showing 0 | Check `cs_nrr.csv`, `cs_csat_sent.csv`, `cs_credits.csv` have a row for (employee_id, year, quarter); verify `employee_id` matches exactly |
+| CS bonus showing 0 | Check `cs_nrr_targets.csv`, `cs_csat_sent.csv`, `cs_credits.csv` have a row for (employee_id, year, quarter); verify `employee_id` matches exactly; confirm quarterly NRR meets the prorated quarterly target |
 | NRR one-off not appearing | Verify Add-On deal has non-zero `Non-Recurring TCV (converted)` in InputData and the account is in the CSA's BoB |
 | Multi-year ACV unexpected | Check Opportunity Owner in InputData — must be a CS employee; AMs/AEs are excluded. See `compute_cs_lead_multi_year_acv()` |
 | Credits score wrong / churned included | Check InputData for Renewal Closed Lost rows for that account in the same quarter; `_load_credits()` in pipeline.py logs excluded accounts |

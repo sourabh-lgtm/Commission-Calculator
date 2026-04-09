@@ -49,18 +49,6 @@ MEASURE_WEIGHTS: dict[str, float] = {
     "credits": 0.15,
 }
 
-# NRR payout tiers: list of (min_pct_inclusive, max_pct_exclusive, payout_fraction)
-NRR_TIERS: list[tuple[float, float, float]] = [
-    (0.0,    90.0,  0.00),
-    (90.0,   92.0,  0.50),
-    (92.0,   94.0,  0.60),
-    (94.0,   96.0,  0.70),
-    (96.0,   98.0,  0.80),
-    (98.0,  100.0,  0.90),
-    (100.0, 101.0,  1.00),
-    # ≥ 101% → 1.00 base; accelerator handled separately
-]
-
 # CSAT minimum CSATs-sent threshold per quarter
 CSAT_MIN_SENT = 10
 
@@ -330,7 +318,10 @@ class CSACommissionPlan(BaseCommissionPlan):
                     (nrr_df["quarter"] == quarter)
                 ]
                 if not nrr_row.empty:
-                    nrr_pct = float(nrr_row["nrr_pct"].iloc[0])
+                    nrr_pct       = float(nrr_row["nrr_pct"].iloc[0])
+                    annual_target = self._get_nrr_target(emp_id, year, cs_performance)
+                    q_nrr_target  = self._quarterly_nrr_target(annual_target, quarter)
+                    payout_frac   = self._nrr_payout_fraction(nrr_pct, q_nrr_target, annual_target)
                     rows.append({
                         "type":             "CS Bonus — NRR (50%)",
                         "date":             month.strftime("%Y-%m-%d"),
@@ -340,7 +331,7 @@ class CSACommissionPlan(BaseCommissionPlan):
                         "sao_type":         "",
                         "acv_eur":          None,
                         "fx_rate":          None,
-                        "rate_desc":        f"NRR {nrr_pct:.1f}% → {self._nrr_payout_fraction(nrr_pct)*100:.0f}% payout",
+                        "rate_desc":        f"NRR {nrr_pct:.1f}% (Q{quarter} target: {q_nrr_target:.1f}%) → {payout_frac*100:.0f}% payout",
                         "commission":       None,   # shown via summary
                         "currency":         currency,
                         "is_forecast":      False,
@@ -485,12 +476,25 @@ class CSACommissionPlan(BaseCommissionPlan):
         ]
         if row.empty:
             return 0.0, 0.0
-        nrr_pct      = float(row["nrr_pct"].iloc[0])
-        nrr_target   = self._get_nrr_target(emp_id, year, cs_performance)
-        attainment   = (nrr_pct / nrr_target) * 100.0  # % of target
-        payout_frac  = self._nrr_payout_fraction(attainment)
-        nrr_bonus    = round(q_target * MEASURE_WEIGHTS["nrr"] * payout_frac, 2)
+        nrr_pct       = float(row["nrr_pct"].iloc[0])
+        annual_target = self._get_nrr_target(emp_id, year, cs_performance)
+        q_nrr_target  = self._quarterly_nrr_target(annual_target, quarter)
+        payout_frac   = self._nrr_payout_fraction(nrr_pct, q_nrr_target, annual_target)
+        nrr_bonus     = round(q_target * MEASURE_WEIGHTS["nrr"] * payout_frac, 2)
         return nrr_pct, nrr_bonus
+
+    @staticmethod
+    def _quarterly_nrr_target(annual_target: float, quarter: int) -> float:
+        """Return the quarterly NRR target using 1:1:1:2 weighting.
+
+        Q1: 100 - loss*(1/5), Q2: *(2/5), Q3: *(3/5), Q4: *1 (= annual target).
+        Returns 100.0 for all quarters when annual_target >= 100 (no loss budget).
+        """
+        weights = {1: 1/5, 2: 2/5, 3: 3/5, 4: 1.0}
+        allowed_loss = 100.0 - annual_target
+        if allowed_loss <= 0:
+            return 100.0
+        return 100.0 - allowed_loss * weights[quarter]
 
     @staticmethod
     def _get_nrr_target(emp_id: str, year: int, cs_performance: dict) -> float:
@@ -507,13 +511,29 @@ class CSACommissionPlan(BaseCommissionPlan):
         return float(row["nrr_target_pct"].iloc[0])
 
     @staticmethod
-    def _nrr_payout_fraction(attainment_pct: float) -> float:
-        """Map attainment % of NRR target to a payout fraction."""
-        for lo, hi, frac in NRR_TIERS:
-            if lo <= attainment_pct < hi:
-                return frac
-        if attainment_pct >= 101.0:
-            return 1.0   # accelerator handled separately
+    def _nrr_payout_fraction(nrr_pct: float, quarterly_target: float, annual_target: float) -> float:
+        """Map actual NRR% to payout fraction using quarterly-prorated tier thresholds.
+
+        Tier step = annual_target*2% prorated by how far quarterly_target is from 100%.
+        When annual_target=100 (no target set) uses 2% fixed steps (original behaviour).
+        """
+        allowed_loss = 100.0 - annual_target
+        if allowed_loss > 0:
+            q_weight = (100.0 - quarterly_target) / allowed_loss
+            q_step = annual_target * 0.02 * q_weight
+        else:
+            q_step = 2.0  # original 2%-step behaviour when no target is set
+        thresholds = [
+            (quarterly_target,            1.00),
+            (quarterly_target - q_step,   0.90),
+            (quarterly_target - 2*q_step, 0.80),
+            (quarterly_target - 3*q_step, 0.70),
+            (quarterly_target - 4*q_step, 0.60),
+            (quarterly_target - 5*q_step, 0.50),
+        ]
+        for threshold, fraction in thresholds:
+            if nrr_pct >= threshold:
+                return fraction
         return 0.0
 
     def _calc_csat_bonus(
