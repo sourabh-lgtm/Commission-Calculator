@@ -581,29 +581,26 @@ def compute_cs_lead_multi_year_acv(
     rows: list[dict] = []
 
     for _, lead in leads.iterrows():
-        lead_id  = lead["employee_id"]
-        team_ids = set(
-            employees_df[employees_df["manager_id"] == lead_id]["employee_id"].tolist()
-        ) | {lead_id}
+        lead_id        = lead["employee_id"]
+        lead_name_lower = id_to_name_lower.get(lead_id, "")
 
-        team_names_lower = {id_to_name_lower[i] for i in team_ids if i in id_to_name_lower}
-
-        # All account IDs for this team
-        team_acct_ids: set[str] = set()
+        # Only accounts owned directly by the team lead (not the whole team)
+        own_acct_ids: set[str] = set()
         for csa_lower, acct_set in csa_to_accounts.items():
-            match = csa_lower in team_names_lower
-            if not match:
-                last = csa_lower.split()[-1] if csa_lower else ""
-                matched_id = last_name_to_id.get(last)
-                match = matched_id in team_ids if matched_id else False
-            if match:
-                team_acct_ids.update(acct_set)
+            if csa_lower == lead_name_lower:
+                own_acct_ids.update(acct_set)
+            elif lead_name_lower:
+                # Last-name fallback
+                lead_last = lead_name_lower.split()[-1]
+                csa_last  = csa_lower.split()[-1] if csa_lower else ""
+                if csa_last and csa_last == lead_last:
+                    own_acct_ids.update(acct_set)
 
-        if not team_acct_ids:
+        if not own_acct_ids:
             continue
 
         team_renewals = renewals[
-            (renewals["_account_id_15"].isin(team_acct_ids)) &
+            (renewals["_account_id_15"].isin(own_acct_ids)) &
             (renewals["_duration_years"] > 1.0)
         ].copy()
 
