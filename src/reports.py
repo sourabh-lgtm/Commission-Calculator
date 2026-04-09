@@ -504,7 +504,10 @@ def employee_list(model) -> list[dict]:
     commissioned = model.employees[
         model.employees["role"].isin(["sdr", "cs", "ae"])
     ].copy()
-    return df_to_records(commissioned[["employee_id", "name", "title", "role", "region", "currency"]])
+    cols = ["employee_id", "name", "title", "role", "region", "currency"]
+    if "manager_id" in commissioned.columns:
+        cols.append("manager_id")
+    return df_to_records(commissioned[cols])
 
 
 # ---------------------------------------------------------------------------

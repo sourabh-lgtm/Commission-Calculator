@@ -73,6 +73,13 @@ _TABS_HTML = """
   <div class="page-title">Advisor Detail</div>
   <p class="page-sub">Quarter-by-quarter performance for an individual advisor</p>
   <div class="controls">
+    <label>Team Lead</label>
+    <select id="cs-team-lead" onchange="onCSTeamLeadChange()">
+      <option value="">All Advisors</option>
+      <option value="UK22">Johnny McCreesh</option>
+      <option value="161">Delphine Froment</option>
+      <option value="UK46">Riad Samir Wakim</option>
+    </select>
     <label>Advisor</label>
     <select id="sd-emp" onchange="loadCSIndividual()"></select>
   </div>
@@ -89,6 +96,25 @@ _ROLE_JS = """
 // ============================================================
 // CS — role init + tab dispatch
 // ============================================================
+
+// Team Lead filter — repopulates sd-emp dropdown based on selected lead
+function onCSTeamLeadChange() {
+  const leadId = document.getElementById('cs-team-lead').value;
+  const el = document.getElementById('sd-emp');
+  if (!el) return;
+  const prev = el.value;
+  el.innerHTML = '';
+  const csEmps = employees.filter(e => e.role === 'cs');
+  const filtered = leadId ? csEmps.filter(e => (e.manager_id || '') === leadId) : csEmps;
+  filtered.forEach(e => {
+    const opt = document.createElement('option');
+    opt.value = e.employee_id; opt.text = e.name;
+    el.appendChild(opt);
+  });
+  if (filtered.some(e => e.employee_id === prev)) el.value = prev;
+  if (el.options.length > 0) loadCSIndividual();
+}
+
 async function onRoleInit() {
   rebuildEmpDropdowns();
 
