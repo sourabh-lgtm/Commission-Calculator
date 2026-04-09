@@ -190,6 +190,16 @@ def _empty_sao_df() -> pd.DataFrame:
 # Closed Won  (built from InputData.csv + InvoiceSearchCommissions.csv)
 # ---------------------------------------------------------------------------
 
+def load_ae_closed_won(data_dir: str, employees: pd.DataFrame, fx_rates: pd.DataFrame) -> pd.DataFrame:
+    """Build the AE closed_won commission table using 'Opportunity Owner' field."""
+    from src.closed_won_commission import build_ae_closed_won_commission, _empty_ae_df
+    input_path = os.path.join(data_dir, "InputData.csv")
+    if os.path.exists(input_path):
+        return build_ae_closed_won_commission(data_dir, employees, fx_rates)
+    from src.closed_won_commission import _empty_ae_df
+    return _empty_ae_df()
+
+
 def load_closed_won(data_dir: str, employees: pd.DataFrame, fx_rates: pd.DataFrame) -> pd.DataFrame:
     """Build the closed_won commission table from Salesforce + NetSuite exports.
 
@@ -255,13 +265,34 @@ def load_all(data_dir: str) -> dict:
 
     fx_rates = load_fx_rates(data_dir)
 
+    ae_cw = load_ae_closed_won(data_dir, employees, fx_rates)
+
+    # Load AE and SDR Lead targets
+    ae_targets       = _load_optional_csv(data_dir, "ae_targets.csv")
+    sdr_lead_targets = _load_optional_csv(data_dir, "sdr_lead_targets.csv")
+
     return {
-        "employees":      employees,
-        "salary_history": salary_history,
-        "sdr_activities": load_sao_commission_data(data_dir, employees),
-        "closed_won":     load_closed_won(data_dir, employees, fx_rates),
-        "fx_rates":       fx_rates,
+        "employees":        employees,
+        "salary_history":   salary_history,
+        "sdr_activities":   load_sao_commission_data(data_dir, employees),
+        "closed_won":       load_closed_won(data_dir, employees, fx_rates),
+        "ae_closed_won":    ae_cw,
+        "ae_targets":       ae_targets,
+        "sdr_lead_targets": sdr_lead_targets,
+        "fx_rates":         fx_rates,
     }
+
+
+def _load_optional_csv(data_dir: str, filename: str) -> "pd.DataFrame":
+    """Load a CSV file if it exists; return empty DataFrame otherwise."""
+    path = os.path.join(data_dir, filename)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    df = pd.read_csv(path)
+    df.columns = df.columns.str.strip()
+    if "employee_id" in df.columns:
+        df["employee_id"] = df["employee_id"].astype(str).str.strip()
+    return df
 
 
 def _empty_salary_history() -> "pd.DataFrame":

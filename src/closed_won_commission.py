@@ -161,6 +161,36 @@ def _calc_first_year_acv(opp_lines: pd.DataFrame) -> float:
     return round(total, 2)
 
 
+def _calc_total_rr_acv(opp_lines: pd.DataFrame) -> float:
+    """Return total ACV (EUR) for ALL years of RR lines (no year-1 cutoff).
+
+    Used together with _calc_first_year_acv to derive multi-year incremental ACV:
+      multi_year_acv = total_rr_acv - first_year_acv
+    """
+    rr = opp_lines[
+        opp_lines["Product Code"].astype(str).str.upper().str.startswith("RR")
+    ].copy()
+
+    if rr.empty:
+        return 0.0
+
+    total = 0.0
+    for _, line in rr.iterrows():
+        line_start = line["line_start"]
+        line_end   = line["line_end"]
+        if pd.isna(line_start) or pd.isna(line_end):
+            continue
+        total_days = (line_end - line_start).days
+        if total_days <= 0:
+            continue
+        price    = float(line.get("Price (converted)", 0) or 0)
+        duration = float(line.get("Duration (years)", 1) or 1)
+        quantity = float(line.get("Quantity", 1) or 1)
+        total += price * duration * quantity
+
+    return round(total, 2)
+
+
 # ---------------------------------------------------------------------------
 # Main builder
 # ---------------------------------------------------------------------------
@@ -416,3 +446,260 @@ def _empty_df() -> pd.DataFrame:
         "invoice_date", "month", "close_date",
         "is_forecast", "document_number", "invoice_currency",
     ])
+
+
+def _empty_ae_df() -> pd.DataFrame:
+    return pd.DataFrame(columns=[
+        "employee_id", "opportunity_id", "opportunity_name", "acv_eur",
+        "multi_year_acv_eur", "invoice_date", "month", "close_date",
+        "is_forecast", "document_number", "invoice_currency",
+    ])
+
+
+# ---------------------------------------------------------------------------
+# AE closed-won builder
+# ---------------------------------------------------------------------------
+
+def build_ae_closed_won_commission(
+    data_dir: str,
+    employees: pd.DataFrame,
+    fx_rates: pd.DataFrame,
+) -> pd.DataFrame:
+    """Return a normalised closed_won DataFrame for AE commission plans.
+
+    Uses the 'Opportunity Owner' field from InputData.csv to match AEs.
+    Adds multi_year_acv_eur: the ACV for year 2+ of multi-year deals.
+    Both acv_eur (1st-year) and multi_year_acv_eur are in EUR.
+    Note: commission % (10% base / 1% multi-year) is applied in ae.py.
+    """
+    input_path   = os.path.join(data_dir, "InputData.csv")
+    invoice_path = os.path.join(data_dir, "InvoiceSearchCommissions.csv")
+
+    if not os.path.exists(input_path):
+        print("[AE CW] InputData.csv not found — AE closed won skipped")
+        return _empty_ae_df()
+
+    # ------------------------------------------------------------------
+    # 1. Load InputData.csv
+    # ------------------------------------------------------------------
+    raw = _read_csv(input_path)
+
+    required = ["Opportunity Id Casesafe", "Stage", "Opportunity Owner", "Lead Source",
+                "Close Date", "Product Code", "Start Date", "End Date",
+                "Price (converted)", "Duration (years)", "Quantity"]
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        print(f"[AE CW] InputData.csv missing columns: {missing} — skipped")
+        return _empty_ae_df()
+
+    # Filter to Closed Won + New Business with a non-blank Opportunity Owner
+    raw = raw[
+        (raw["Stage"].str.strip().str.lower() == "closed won") &
+        (raw["Type"].str.strip().str.lower() == "new business") &
+        (raw["Opportunity Owner"].notna()) &
+        (raw["Opportunity Owner"].astype(str).str.strip() != "")
+    ].copy()
+
+    if raw.empty:
+        print("[AE CW] No Closed Won New Business rows with Opportunity Owner found")
+        return _empty_ae_df()
+
+    # Parse line-level dates and numerics (same as SDR builder)
+    raw["line_start"] = pd.to_datetime(raw["Start Date"].astype(str).str.strip(),
+                                        format="%d/%m/%Y", errors="coerce")
+    raw["line_end"]   = pd.to_datetime(raw["End Date"].astype(str).str.strip(),
+                                        format="%d/%m/%Y", errors="coerce")
+    raw["Price (converted)"] = pd.to_numeric(
+        raw["Price (converted)"].astype(str).str.replace(",", ""), errors="coerce"
+    ).fillna(0.0)
+    raw["Duration (years)"] = pd.to_numeric(raw["Duration (years)"], errors="coerce").fillna(1.0)
+    raw["Quantity"]         = pd.to_numeric(raw["Quantity"], errors="coerce").fillna(1.0)
+
+    # ------------------------------------------------------------------
+    # 2. Calculate 1st-year and total ACV per opportunity
+    # ------------------------------------------------------------------
+    first_year_acv: dict[str, float] = {}
+    total_acv:      dict[str, float] = {}
+
+    for opp_id, grp in raw.groupby("Opportunity Id Casesafe"):
+        key = str(opp_id).strip()
+        fy  = _calc_first_year_acv(grp)
+        tot = _calc_total_rr_acv(grp)
+        first_year_acv[key] = fy
+        total_acv[key]      = tot
+
+    # ------------------------------------------------------------------
+    # 3. Build opportunity-level summary
+    # ------------------------------------------------------------------
+    opp_cols = ["Opportunity Id Casesafe", "Opportunity Name", "Opportunity Owner",
+                "Lead Source", "Close Date"]
+    opps = (
+        raw[opp_cols]
+        .drop_duplicates(subset=["Opportunity Id Casesafe"])
+        .copy()
+    )
+
+    opps["close_date"] = pd.to_datetime(
+        opps["Close Date"].astype(str).str.strip(), format="%d/%m/%Y", errors="coerce"
+    )
+    opps = opps.dropna(subset=["close_date"])
+
+    opps["opportunity_id"]   = opps["Opportunity Id Casesafe"].astype(str).str.strip()
+    opps["opportunity_name"] = (
+        opps["Opportunity Name"].astype(str).str.strip()
+        if "Opportunity Name" in opps.columns
+        else opps["opportunity_id"]
+    )
+    opps["acv_eur"]           = opps["opportunity_id"].map(first_year_acv).fillna(0.0)
+    opps["total_rr_acv_eur"]  = opps["opportunity_id"].map(total_acv).fillna(0.0)
+    opps["multi_year_acv_eur"] = (opps["total_rr_acv_eur"] - opps["acv_eur"]).clip(lower=0.0)
+
+    # ------------------------------------------------------------------
+    # 4. Match Opportunity Owner name → AE employee_id
+    # ------------------------------------------------------------------
+    ae_emps = employees[employees["role"] == "ae"][["employee_id", "name"]].copy()
+    ae_emps["name_lower"] = ae_emps["name"].str.strip().str.lower()
+    opps["_owner_lower"] = opps["Opportunity Owner"].astype(str).str.strip().str.lower()
+
+    # Exact match first
+    opps = opps.merge(
+        ae_emps[["employee_id", "name_lower"]],
+        left_on="_owner_lower",
+        right_on="name_lower",
+        how="inner",
+    ).drop(columns=["_owner_lower", "name_lower"])
+
+    if opps.empty:
+        print("[AE CW] No Opportunity Owner names matched AE employees — skipped")
+        return _empty_ae_df()
+
+    n_opps = opps["opportunity_id"].nunique()
+    n_with_acv = (opps["acv_eur"] > 0).sum()
+    print(f"[AE CW] {n_opps} Closed Won deals matched to AEs "
+          f"({n_with_acv} with 1st-year ACV > 0 from RR lines)")
+
+    # ------------------------------------------------------------------
+    # 5. Load InvoiceSearchCommissions.csv
+    # ------------------------------------------------------------------
+    rows = []
+
+    if os.path.exists(invoice_path):
+        inv = _read_csv(invoice_path)
+        req_inv = ["External ID", "Date", "Period", "Type", "Subtotal 1", "Currency"]
+        missing_inv = [c for c in req_inv if c not in inv.columns]
+        if missing_inv:
+            print(f"[AE CW] InvoiceSearchCommissions.csv missing columns: {missing_inv} — all forecast")
+            inv = pd.DataFrame()
+        else:
+            inv["External ID"] = inv["External ID"].astype(str).str.strip()
+            inv["Period_ts"]   = inv["Period"].apply(_parse_period)
+            inv["Date_ts"]     = pd.to_datetime(
+                inv["Date"].astype(str).str.strip(), format="%d/%m/%Y", errors="coerce"
+            )
+            inv["amount_raw"]  = inv["Subtotal 1"].apply(_parse_subtotal)
+            inv["currency"]    = inv["Currency"].astype(str).str.strip().str.upper()
+            is_credit = inv["Type"].astype(str).str.strip().str.lower() == "credit memo"
+            inv.loc[is_credit, "amount_raw"] = -inv.loc[is_credit, "amount_raw"].abs()
+    else:
+        print("[AE CW] InvoiceSearchCommissions.csv not found — all forecast")
+        inv = pd.DataFrame()
+
+    matched_opp_ids: set[str] = set(inv["External ID"].unique()) if not inv.empty else set()
+
+    # ------------------------------------------------------------------
+    # 6a. MATCHED deals: proportional split by invoice amount
+    # ------------------------------------------------------------------
+    if not inv.empty:
+        inv_merged = inv.merge(
+            opps[["opportunity_id", "opportunity_name", "employee_id",
+                  "acv_eur", "multi_year_acv_eur", "close_date"]],
+            left_on="External ID",
+            right_on="opportunity_id",
+            how="inner",
+        )
+
+        inv_totals = (
+            inv_merged.groupby("opportunity_id")["amount_raw"]
+            .sum()
+            .rename("total_invoiced")
+        )
+        inv_merged = inv_merged.join(inv_totals, on="opportunity_id")
+
+        for _, r in inv_merged.iterrows():
+            period_ts  = r["Period_ts"]
+            invoice_dt = r["Date_ts"] if pd.notna(r["Date_ts"]) else period_ts
+            if pd.isna(period_ts):
+                period_ts = invoice_dt
+            if pd.isna(period_ts):
+                continue
+
+            inv_currency   = r["currency"]
+            amount_local   = r["amount_raw"]
+            total_invoiced = r.get("total_invoiced", amount_local) or amount_local
+
+            fx_month = period_ts.to_period("M").to_timestamp()
+            if inv_currency != "EUR":
+                fx_rate = _get_fx_to_eur(fx_rates, fx_month, inv_currency)
+                amount_eur_inv = amount_local / fx_rate if fx_rate != 0 else amount_local
+                total_eur_inv  = total_invoiced / fx_rate if fx_rate != 0 else total_invoiced
+            else:
+                amount_eur_inv = amount_local
+                total_eur_inv  = total_invoiced
+
+            deal_acv_fy = float(r["acv_eur"])
+            deal_acv_my = float(r["multi_year_acv_eur"])
+
+            if total_eur_inv != 0 and deal_acv_fy > 0:
+                proportion = amount_eur_inv / total_eur_inv
+                commission_acv_fy = deal_acv_fy * proportion
+                commission_acv_my = deal_acv_my * proportion
+            else:
+                commission_acv_fy = amount_eur_inv
+                commission_acv_my = 0.0
+
+            rows.append({
+                "employee_id":       r["employee_id"],
+                "opportunity_id":    r["opportunity_id"],
+                "opportunity_name":  r.get("opportunity_name", r["opportunity_id"]),
+                "acv_eur":           round(commission_acv_fy, 2),
+                "multi_year_acv_eur": round(commission_acv_my, 2),
+                "invoice_date":      invoice_dt,
+                "month":             period_ts.to_period("M").to_timestamp(),
+                "close_date":        r["close_date"],
+                "is_forecast":       False,
+                "document_number":   str(r.get("Document Number", "")).strip(),
+                "invoice_currency":  inv_currency,
+            })
+
+    # ------------------------------------------------------------------
+    # 6b. UNMATCHED deals: forecast rows
+    # ------------------------------------------------------------------
+    unmatched = opps[~opps["opportunity_id"].isin(matched_opp_ids)]
+    forecast_count = 0
+
+    for _, r in unmatched.iterrows():
+        close_dt = r["close_date"]
+        rows.append({
+            "employee_id":        r["employee_id"],
+            "opportunity_id":     r["opportunity_id"],
+            "opportunity_name":   r.get("opportunity_name", r["opportunity_id"]),
+            "acv_eur":            round(float(r["acv_eur"]), 2),
+            "multi_year_acv_eur": round(float(r["multi_year_acv_eur"]), 2),
+            "invoice_date":       close_dt,
+            "month":              close_dt.to_period("M").to_timestamp(),
+            "close_date":         close_dt,
+            "is_forecast":        True,
+            "document_number":    "",
+            "invoice_currency":   "EUR",
+        })
+        forecast_count += 1
+
+    actual_count = len(rows) - forecast_count
+    print(f"[AE CW] Invoice rows: {actual_count}, Forecast rows: {forecast_count}")
+
+    if not rows:
+        return _empty_ae_df()
+
+    result = pd.DataFrame(rows)
+    result = result.dropna(subset=["month"])
+    return result.reset_index(drop=True)

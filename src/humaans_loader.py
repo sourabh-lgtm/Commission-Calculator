@@ -15,14 +15,22 @@ import pandas as pd
 # Matching is case-insensitive substring.
 # ---------------------------------------------------------------------------
 _TITLE_RULES: list[tuple[str, str]] = [
+    # SDR Lead (check before generic SDR to avoid overlap)
+    ("sdr team lead",    "sdr_lead"),
+    ("sdr lead",         "sdr_lead"),
+
     # SDR variants (check before "account" so "SDR" doesn't fall through)
     ("sales development representative", "sdr"),
     ("enterprise sales development",     "sdr"),
 
-    # AE variants (check before "account manager" to avoid overlap)
+    # AE variants — check before "account manager" to avoid overlap;
+    # "Nordic Sales Lead" and "Inside Sales Executive" are AE-equivalent roles
     ("enterprise account executive",  "ae"),
     ("mid-market account executive",  "ae"),
+    ("midmarket account executive",   "ae"),
     ("account executive",             "ae"),
+    ("nordic sales lead",             "ae"),
+    ("inside sales executive",        "ae"),
 
     # AM variants
     ("senior account manager", "am"),

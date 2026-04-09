@@ -1,0 +1,7 @@
+employee_id,year,quarterly_target_eur,annual_target_eur,is_ramp_q1
+209,2026,75000,300000,False
+243,2026,112500,450000,False
+UK30,2026,80000,320000,False
+UK2,2026,80000,320000,False
+UK63,2026,72500,290000,True
+UK18,2026,72500,290000,True

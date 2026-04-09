@@ -13,6 +13,7 @@ class CommissionModel:
         self.salary_history: pd.DataFrame = pd.DataFrame()
         self.sdr_activities: pd.DataFrame = pd.DataFrame()
         self.closed_won: pd.DataFrame = pd.DataFrame()
+        self.ae_closed_won: pd.DataFrame = pd.DataFrame()
         self.fx_rates: pd.DataFrame = pd.DataFrame()
         self.commission_monthly: pd.DataFrame = pd.DataFrame()
         self.accelerators: pd.DataFrame = pd.DataFrame()
@@ -20,8 +21,10 @@ class CommissionModel:
         self.spif_awards: pd.DataFrame = pd.DataFrame()
         self.active_months: list[pd.Timestamp] = []
         self.default_month: pd.Timestamp | None = None
-        # CS-specific performance inputs
-        # Keys: "nrr", "csat_sent", "csat_scores", "credits", "referrals"
+        # Performance inputs shared across all commission plans.
+        # Keys: "nrr", "csat_sent", "csat_scores", "credits", "referrals" (CS),
+        #       "ae_closed_won", "ae_targets", "fx_rates",
+        #       "sdr_closed_won", "sdr_lead_targets" (AE / SDR Lead)
         self.cs_performance: dict = {}
 
 
@@ -37,8 +40,15 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.salary_history = data["salary_history"]
     model.sdr_activities = data["sdr_activities"]
     model.closed_won     = data["closed_won"]
+    model.ae_closed_won  = data.get("ae_closed_won", pd.DataFrame())
     model.fx_rates       = data["fx_rates"]
     model.cs_performance = _load_cs_performance(data_dir, data.get("employees"))
+    # Inject AE / SDR Lead data into cs_performance so commission plans can access it
+    model.cs_performance["ae_closed_won"]    = model.ae_closed_won
+    model.cs_performance["ae_targets"]       = data.get("ae_targets", pd.DataFrame())
+    model.cs_performance["sdr_closed_won"]   = model.closed_won
+    model.cs_performance["sdr_lead_targets"] = data.get("sdr_lead_targets", pd.DataFrame())
+    model.cs_performance["fx_rates"]         = model.fx_rates
 
     # ------------------------------------------------------------------
     # Stage 2: Build activity calendar (all months present in activity data)
@@ -91,13 +101,24 @@ def run_pipeline(data_dir: str) -> CommissionModel:
         plan_cls = get_plan(emp["role"])
         plan     = plan_cls()
         for (year, quarter) in years_quarters:
+            # Skip quarters entirely outside the employee's plan window
+            q_months = quarter_months(year, quarter)
+            q_end    = quarter_end_month(q_months[0])
+            if pd.notna(emp["plan_start_date"]):
+                plan_start_month = emp["plan_start_date"].to_period("M").to_timestamp()
+                if q_end < plan_start_month:
+                    continue   # entire quarter before plan start
+            if pd.notna(emp["plan_end_date"]):
+                plan_end_month = emp["plan_end_date"].to_period("M").to_timestamp()
+                if q_months[0] > plan_end_month:
+                    continue   # entire quarter after plan end
             row = plan.calculate_quarterly_accelerator(
                 emp, year, quarter,
                 model.sdr_activities,
                 model.salary_history,
                 cs_performance=model.cs_performance,
             )
-            if row.get("accelerator_topup", 0) > 0:
+            if row.get("accelerator_topup", 0) != 0:
                 accel_rows.append(row)
 
     model.accelerators = pd.DataFrame(accel_rows) if accel_rows else pd.DataFrame()
@@ -210,10 +231,20 @@ def _discover_months(model: CommissionModel) -> list[pd.Timestamp]:
         months.update(model.sdr_activities["month"].dropna().unique())
     if not model.closed_won.empty and "month" in model.closed_won.columns:
         months.update(model.closed_won["month"].dropna().unique())
+    # Include AE deal invoice months
+    if not model.ae_closed_won.empty and "month" in model.ae_closed_won.columns:
+        months.update(model.ae_closed_won["month"].dropna().unique())
     # Include months from CS referral dates so CS employees appear even if no SDR data
     ref_df = model.cs_performance.get("referrals", pd.DataFrame())
     if not ref_df.empty and "month" in ref_df.columns:
         months.update(ref_df["month"].dropna().unique())
+    # Ensure quarter-end months are always present for any active quarter.
+    # This guarantees AE / CSA quarterly bonuses always have a commission row to land on.
+    quarter_ends = set()
+    for m in months:
+        qe_month = ((m.month - 1) // 3 + 1) * 3   # 3, 6, 9, or 12
+        quarter_ends.add(pd.Timestamp(year=m.year, month=qe_month, day=1))
+    months.update(quarter_ends)
     return list(months)
 
 

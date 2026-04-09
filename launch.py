@@ -22,6 +22,7 @@ from src.reports import (
     employee_list, available_months,
     payroll_summary, accrual_summary,
     cs_overview, cs_quarterly,
+    ae_overview, ae_detail,
 )
 from src.approval_state import ApprovalState
 from src.helpers import clean_json
@@ -242,6 +243,17 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", len(xls))
             self.end_headers()
             self.wfile.write(xls)
+            return
+
+        if path == "/api/ae_overview":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            self._respond(ae_overview(MODEL, yr))
+            return
+
+        if path == "/api/ae_detail":
+            emp_id = _p("employee_id", "")
+            yr = int(_p("year", pd.Timestamp.now().year))
+            self._respond(ae_detail(MODEL, emp_id, yr))
             return
 
         self._respond({"error": "Not found"}, 404)
