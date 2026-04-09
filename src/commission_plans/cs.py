@@ -577,7 +577,9 @@ class CSACommissionPlan(BaseCommissionPlan):
             (credits_df["quarter"] == quarter)
         ]
         if row.empty:
-            return 0.0, 0.0
+            # No credits allocated in this portfolio → full payout (100%)
+            credits_bonus = round(q_target * MEASURE_WEIGHTS["credits"] * 1.0, 2)
+            return 100.0, credits_bonus
 
         credits_used_pct = float(row["credits_used_pct"].iloc[0])
 
