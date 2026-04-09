@@ -267,8 +267,8 @@ async function loadWorkings() {
   const {rows, summary} = data;
   const cur = summary.currency || 'EUR';
 
-  // ---- CS (Climate Strategy Advisor) ----
-  if (globalRole() === 'cs') {
+  // ---- CS (Climate Strategy Advisor / CS Lead) ----
+  if (['cs', 'cs_lead'].includes(globalRole())) {
     const kpiEl = document.getElementById('wk-kpis');
     const refComm = (summary.referral_sao_comm||0) + (summary.referral_cw_comm||0);
     kpiEl.innerHTML =
@@ -525,7 +525,7 @@ async function loadApprovalStatus() {
   const sent     = displayData.filter(e => e.status === 'sent').length;
   document.getElementById('as-counts').textContent = approved + ' approved \u00b7 ' + sent + ' sent \u00b7 ' + pending + ' pending';
 
-  const isCS     = globalRole() === 'cs';
+  const isCS     = ['cs', 'cs_lead'].includes(globalRole());
   const isQEnd   = isCS && ['03','06','09','12'].includes(month.slice(5,7));
   const payLabel = isCS ? 'Total Payout' : 'Total Commission';
 

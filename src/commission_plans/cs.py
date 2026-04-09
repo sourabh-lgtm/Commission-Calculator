@@ -305,12 +305,15 @@ class CSACommissionPlan(BaseCommissionPlan):
         q_nrr_target  = self._quarterly_nrr_target(annual_target, quarter)
         payout_frac   = self._nrr_payout_fraction(nrr_pct, q_nrr_target, annual_target)
 
+        # Read denominator and numerator directly from nrr_df (set by cs_nrr_loader)
+        total_arr = float(nrr_row["total_arr"].iloc[0]) if "total_arr" in nrr_row.columns else 0.0
+        numerator = float(nrr_row["nrr_numerator"].iloc[0]) if "nrr_numerator" in nrr_row.columns else 0.0
+        net_change = numerator - total_arr
+
         rows = [self._section_row(f"NRR \u2014 50% weight", currency)]
 
-        # Per-account breakdown to compute totals
+        # Per-account breakdown (accounts with activity only)
         bkd_df    = cs_performance.get("nrr_breakdown", pd.DataFrame())
-        total_arr = 0.0
-        net_change = 0.0
         acct_rows_list = []
         if not bkd_df.empty:
             acct_rows = bkd_df[
@@ -325,8 +328,6 @@ class CSACommissionPlan(BaseCommissionPlan):
                 churn      = float(ar.get("churn", 0) or 0)
                 base       = float(ar.get("base_arr", 0) or 0)
                 net        = add_on + one_off + upsell_dwn + churn
-                total_arr += base
-                net_change += net
                 parts = []
                 if add_on:     parts.append(f"Add-on: {add_on:+,.0f}")
                 if one_off:    parts.append(f"One-off svc (50%): {one_off:+,.0f}")
@@ -346,8 +347,6 @@ class CSACommissionPlan(BaseCommissionPlan):
                     "currency":         currency,
                     "is_forecast":      False,
                 })
-
-        numerator = total_arr + net_change
 
         # BoB info row
         rows.append({

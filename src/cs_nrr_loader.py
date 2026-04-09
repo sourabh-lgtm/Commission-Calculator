@@ -77,7 +77,7 @@ def compute_cs_nrr(
     bob_path   = os.path.join(data_dir, "cs_book_of_business.csv")
     input_path = os.path.join(data_dir, "InputData.csv")
 
-    _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
+    _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct", "total_arr", "nrr_numerator"])
     _empty_bkd = pd.DataFrame(columns=[
         "employee_id", "year", "quarter", "account_id", "account_name",
         "base_arr", "add_on", "one_off", "upsell_downsell", "churn",
@@ -276,10 +276,12 @@ def compute_cs_nrr(
             )
 
             results.append({
-                "employee_id": emp_id,
-                "year":        yr,
-                "quarter":     qt,
-                "nrr_pct":     nrr_pct,
+                "employee_id":   emp_id,
+                "year":          yr,
+                "quarter":       qt,
+                "nrr_pct":       nrr_pct,
+                "total_arr":     total_arr,
+                "nrr_numerator": nrr_numerator,
             })
 
             # ---- Per-account breakdown (accounts with activity or synthetic churn) ----
@@ -340,7 +342,7 @@ def compute_cs_lead_nrr(
     Returns (nrr_df, breakdown_df) with the team lead's employee_id as key,
     ready to be appended to the individual CSA nrr tables.
     """
-    _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct"])
+    _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct", "total_arr", "nrr_numerator"])
     _empty_bkd = pd.DataFrame(columns=[
         "employee_id", "year", "quarter", "account_id", "account_name",
         "base_arr", "add_on", "one_off", "upsell_downsell", "churn",
@@ -518,7 +520,7 @@ def compute_cs_lead_nrr(
                 f"upsell/down={upsell_down:,.0f}  churn={churn:,.0f}  NRR={nrr_pct:.2f}%"
             )
 
-            results.append({"employee_id": lead_id, "year": yr, "quarter": qt, "nrr_pct": nrr_pct})
+            results.append({"employee_id": lead_id, "year": yr, "quarter": qt, "nrr_pct": nrr_pct, "total_arr": total_arr, "nrr_numerator": nrr_numerator})
 
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
