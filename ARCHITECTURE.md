@@ -29,75 +29,75 @@ Internal tool for **Normative** that calculates, reviews, approves, and distribu
 
 ```
 Commission Calculator/
-├── launch.py                   # Entry point: HTTP server + all API route handlers + embedded HTML
-├── export_excel.py             # Payroll and Finance Accruals Excel workbook builders
-├── config.ini                  # SMTP + runtime config (gitignored)
-├── requirements.txt
-│
-├── src/
-│   ├── pipeline.py             # 6-stage orchestration; defines CommissionModel dataclass
-│   ├── loader.py               # CSV loading, SAO deduplication, data routing
-│   ├── humaans_loader.py       # Humaans HR export parser; job title → role mapping
-│   ├── closed_won_commission.py# ACV commission calculation from InputData + NetSuite invoices
-│   ├── cs_nrr_loader.py        # Computes NRR from cs_book_of_business.csv + InputData.csv
-│   │                           #   compute_cs_nrr()          — per-CSA NRR (individual BoB)
-│   │                           #   compute_cs_lead_nrr()     — team-aggregate NRR for cs_leads
-│   │                           #   compute_cs_lead_multi_year_acv() — multi-year ACV deals
-│   │                           #   NRR numerator = ARR + add_ons + one_off(50%) + upsell + churn
-│   │                           #   one_off = 50% of Non-Recurring TCV on Add-On deals (CSA/AM split)
-│   │                           #   Both NRR functions include synthetic churn for expired
-│   │                           #   contracts (Renewal Date in YTD window, no renewal record)
-│   │                           #   multi-year ACV: Opportunity Owner must be a CS employee
-│   ├── reports.py              # All JSON report builder functions (called from API routes)
-│   ├── spif.py                 # SPIF award calculation logic
-│   ├── approval_state.py       # JSON-backed per-employee approval state machine
-│   ├── pdf_generator.py        # ReportLab commission statement PDFs — role-specific pages
-│   │                           #   generate_statement() dispatches on employee["role"]:
-│   │                           #   CS → _cs_summary_page() + _cs_workings_page()
-│   │                           #   SDR/AE/AM → _summary_page() + _workings_page()
-│   ├── email_sender.py         # SMTP email dispatch (statements + Excel reports)
-│   ├── helpers.py              # Shared utilities: get_fx_rate, quarter_months, clean_json, etc.
-│   ├── commission_plans/
-│   │   ├── __init__.py         # get_plan(role) registry
-│   │   ├── base.py             # BaseCommissionPlan ABC
-│   │   ├── sdr.py              # SDRCommissionPlan
-│   │   └── cs.py               # CSACommissionPlan (Climate Strategy Advisors)
-│   └── dashboards/
-│       ├── base.py             # Shared HTML/CSS/JS (assemble_html, shared tab loaders)
-│       │                       #   loadWorkings() — role-aware: CS branch vs SDR/AE/AM branch
-│       │                       #   loadAccrualSummary() — employer-contrib detection by explicit
-│       │                       #     type name, not by type !== 'Commission'
-│       ├── sdr.py              # SDR-specific nav links, tab HTML, role JS
-│       ├── cs.py               # CS-specific nav links, tab HTML, role JS
-│       ├── ae.py               # AE-specific nav links, tab HTML, role JS
-│       ├── am.py               # AM-specific nav links, tab HTML, role JS
-│       └── __init__.py         # build_dashboard_html(role) dispatcher
-│
-├── data/                       # Input CSVs — gitignored (contains PII)
-│   ├── README.txt              # Detailed data file spec (column names, formats, rules)
-│   ├── humaans_export.csv      # Primary HR source (employees, salaries, managers)
-│   ├── SAO_commission_data.csv # Salesforce CRM export (~4,830 rows)
-│   ├── InputData.csv           # Closed-won ACV data (~2,122 rows)
-│   ├── InvoiceSearchCommissions.csv  # NetSuite invoice matching (144 rows)
-│   ├── employees.csv           # Fallback if humaans_export.csv absent
-│   ├── fx_rates.csv            # EUR→SEK/GBP/USD monthly rates
-│   ├── spif_targets.csv        # SPIF definitions
-│   ├── approval_state.json     # Auto-managed approval state (safe to delete to reset)
-│   │
-│   │   # CS (Climate Strategy) performance inputs — filled by Finance each quarter
-│   ├── cs_book_of_business.csv # Book of Business: one row per account per CSA
-│   │                           #   col 6  (index 5)  = Account Name
-│   │                           #   col 10 (index 9)  = Flat Renewal ACV (converted) — base ARR
-│   │                           #   col 12 (index 11) = Account ID (15-char Salesforce ID)
-│   │                           #   col 13 (index 12) = Renewal Date (DD/MM/YYYY)
-│   │                           #   col 20 (index 19) = CSA 2026 — name matched to employees
-│   ├── cs_csat_sent.csv        # Total CSATs sent per employee per quarter (threshold check)
-│   ├── cs_csat_scores.csv      # Individual CSAT scores 0–5 (one row per response)
-│   ├── cs_credits.csv          # Service tier credits used % per employee per quarter
-│   └── cs_referrals.csv        # CS referral SAOs and closed-won deals
-│
-├── output/statements/          # Generated PDFs (gitignored)
-└── assets/normative_logo.png   # Used in PDF statements
++-- launch.py                   # Entry point: HTTP server + all API route handlers + embedded HTML
++-- export_excel.py             # Payroll and Finance Accruals Excel workbook builders
++-- config.ini                  # SMTP + runtime config (gitignored)
++-- requirements.txt
+|
++-- src/
+|   +-- pipeline.py             # 6-stage orchestration; defines CommissionModel dataclass
+|   +-- loader.py               # CSV loading, SAO deduplication, data routing
+|   +-- humaans_loader.py       # Humaans HR export parser; job title → role mapping
+|   +-- closed_won_commission.py# ACV commission calculation from InputData + NetSuite invoices
+|   +-- cs_nrr_loader.py        # Computes NRR from cs_book_of_business.csv + InputData.csv
+|   |                           #   compute_cs_nrr()          — per-CSA NRR (individual BoB)
+|   |                           #   compute_cs_lead_nrr()     — team-aggregate NRR for cs_leads
+|   |                           #   compute_cs_lead_multi_year_acv() — multi-year ACV deals
+|   |                           #   NRR numerator = ARR + add_ons + one_off(50%) + upsell + churn
+|   |                           #   one_off = 50% of Non-Recurring TCV on Add-On deals (CSA/AM split)
+|   |                           #   Both NRR functions include synthetic churn for expired
+|   |                           #   contracts (Renewal Date in YTD window, no renewal record)
+|   |                           #   multi-year ACV: Opportunity Owner must be a CS employee
+|   +-- reports.py              # All JSON report builder functions (called from API routes)
+|   +-- spif.py                 # SPIF award calculation logic
+|   +-- approval_state.py       # JSON-backed per-employee approval state machine
+|   +-- pdf_generator.py        # ReportLab commission statement PDFs — role-specific pages
+|   |                           #   generate_statement() dispatches on employee["role"]:
+|   |                           #   CS → _cs_summary_page() + _cs_workings_page()
+|   |                           #   SDR/AE/AM → _summary_page() + _workings_page()
+|   +-- email_sender.py         # SMTP email dispatch (statements + Excel reports)
+|   +-- helpers.py              # Shared utilities: get_fx_rate, quarter_months, clean_json, etc.
+|   +-- commission_plans/
+|   |   +-- __init__.py         # get_plan(role) registry
+|   |   +-- base.py             # BaseCommissionPlan ABC
+|   |   +-- sdr.py              # SDRCommissionPlan
+|   |   `-- cs.py               # CSACommissionPlan (Climate Strategy Advisors)
+|   `-- dashboards/
+|       +-- base.py             # Shared HTML/CSS/JS (assemble_html, shared tab loaders)
+|       |                       #   loadWorkings() — role-aware: CS branch vs SDR/AE/AM branch
+|       |                       #   loadAccrualSummary() — employer-contrib detection by explicit
+|       |                       #     type name, not by type !== 'Commission'
+|       +-- sdr.py              # SDR-specific nav links, tab HTML, role JS
+|       +-- cs.py               # CS-specific nav links, tab HTML, role JS
+|       +-- ae.py               # AE-specific nav links, tab HTML, role JS
+|       +-- am.py               # AM-specific nav links, tab HTML, role JS
+|       `-- __init__.py         # build_dashboard_html(role) dispatcher
+|
++-- data/                       # Input CSVs — gitignored (contains PII)
+|   +-- README.txt              # Detailed data file spec (column names, formats, rules)
+|   +-- humaans_export.csv      # Primary HR source (employees, salaries, managers)
+|   +-- SAO_commission_data.csv # Salesforce CRM export (~4,830 rows)
+|   +-- InputData.csv           # Closed-won ACV data (~2,122 rows)
+|   +-- InvoiceSearchCommissions.csv  # NetSuite invoice matching (144 rows)
+|   +-- employees.csv           # Fallback if humaans_export.csv absent
+|   +-- fx_rates.csv            # EUR→SEK/GBP/USD monthly rates
+|   +-- spif_targets.csv        # SPIF definitions
+|   +-- approval_state.json     # Auto-managed approval state (safe to delete to reset)
+|   |
+|   |   # CS (Climate Strategy) performance inputs — filled by Finance each quarter
+|   +-- cs_book_of_business.csv # Book of Business: one row per account per CSA
+|   |                           #   col 6  (index 5)  = Account Name
+|   |                           #   col 10 (index 9)  = Flat Renewal ACV (converted) — base ARR
+|   |                           #   col 12 (index 11) = Account ID (15-char Salesforce ID)
+|   |                           #   col 13 (index 12) = Renewal Date (DD/MM/YYYY)
+|   |                           #   col 20 (index 19) = CSA 2026 — name matched to employees
+|   +-- cs_csat_sent.csv        # Total CSATs sent per employee per quarter (threshold check)
+|   +-- cs_csat_scores.csv      # Individual CSAT scores 0–5 (one row per response)
+|   +-- cs_credits.csv          # Service tier credits used % per employee per quarter
+|   `-- cs_referrals.csv        # CS referral SAOs and closed-won deals
+|
++-- output/statements/          # Generated PDFs (gitignored)
+`-- assets/normative_logo.png   # Used in PDF statements
 ```
 
 ---
