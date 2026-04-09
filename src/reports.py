@@ -253,7 +253,7 @@ def payroll_summary(model, year: int) -> dict:
     def _q(m): return (m.month - 1) // 3 + 1
 
     commissioned = model.employees[
-        model.employees["role"].isin(["sdr", "cs", "ae"])
+        model.employees["role"].isin(["sdr", "cs", "cs_lead", "ae"])
     ].copy()
     regions: dict[str, list] = {}
 
@@ -502,7 +502,7 @@ def accrual_summary(model, year: int) -> dict:
 
 def employee_list(model) -> list[dict]:
     commissioned = model.employees[
-        model.employees["role"].isin(["sdr", "cs", "ae"])
+        model.employees["role"].isin(["sdr", "cs", "cs_lead", "ae"])
     ].copy()
     cols = ["employee_id", "name", "title", "role", "region", "currency"]
     if "manager_id" in commissioned.columns:

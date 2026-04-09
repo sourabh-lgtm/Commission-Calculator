@@ -1,11 +1,13 @@
 from src.commission_plans.sdr import SDRCommissionPlan
 from src.commission_plans.cs import CSACommissionPlan
+from src.commission_plans.cs_lead import CSLeadCommissionPlan
 from src.commission_plans.ae import AECommissionPlan
 from src.commission_plans.sdr_lead import SDRLeadCommissionPlan
 
 PLAN_REGISTRY = {
     "sdr":      SDRCommissionPlan,
     "cs":       CSACommissionPlan,
+    "cs_lead":  CSLeadCommissionPlan,
     "ae":       AECommissionPlan,
     "sdr_lead": SDRLeadCommissionPlan,
     # Future roles:

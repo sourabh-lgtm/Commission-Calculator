@@ -287,7 +287,7 @@ def _load_csat_sent(data_dir: str, employees_df: pd.DataFrame | None) -> pd.Data
         print("[Pipeline] CS: no employees_df for CSAT report name matching.")
         return pd.DataFrame(columns=["employee_id", "year", "quarter", "csats_sent"])
 
-    cs_emps = employees_df[employees_df["role"] == "cs"][["employee_id", "name"]].copy()
+    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
     cs_emps["_lower"]     = cs_emps["name"].str.strip().str.lower()
     cs_emps["_last"]      = cs_emps["_lower"].str.split().str[-1]
 
@@ -385,7 +385,7 @@ def _load_csat_scores(data_dir: str, employees_df: pd.DataFrame | None) -> pd.Da
         print("[Pipeline] CS: no employees_df for CSAT scores name matching.")
         return pd.DataFrame(columns=["employee_id", "date", "score"])
 
-    cs_emps = employees_df[employees_df["role"] == "cs"][["employee_id", "name"]].copy()
+    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
     cs_emps["_lower"] = cs_emps["name"].str.strip().str.lower()
     cs_emps["_last"]  = cs_emps["_lower"].str.split().str[-1]
 
@@ -471,7 +471,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
         print("[Pipeline] CS: no employees_df for credits name matching.")
         return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
 
-    cs_emps = employees_df[employees_df["role"] == "cs"][["employee_id", "name"]].copy()
+    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
     cs_emps["_lower"] = cs_emps["name"].str.strip().str.lower()
     cs_emps["_last"]  = cs_emps["_lower"].str.split().str[-1]
 
@@ -511,17 +511,21 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
         return round(row["total_used"] / row["total_allocated"] * 100, 4)
 
     agg["credits_used_pct"] = agg.apply(_pct, axis=1)
-    result = agg.rename(columns={
-        "_employee_id": "employee_id",
-        "_year":        "year",
-        "_quarter":     "quarter",
-    })[["employee_id", "year", "quarter", "credits_used_pct"]]
+    raw_result = agg.rename(columns={
+        "_employee_id":   "employee_id",
+        "_year":          "year",
+        "_quarter":       "quarter",
+    })[["employee_id", "year", "quarter", "total_allocated", "total_used"]]
+
+    result = raw_result[["employee_id", "year", "quarter"]].copy()
+    result["credits_used_pct"] = agg["credits_used_pct"].values
 
     for col in ("year", "quarter"):
-        result[col] = result[col].astype("Int64")
+        result[col]     = result[col].astype("Int64")
+        raw_result[col] = raw_result[col].astype("Int64")
 
     print(f"[Pipeline] CS: loaded credits from cs_credits_report.csv — {len(result)} employee-quarter rows.")
-    return result
+    return result, raw_result
 
 
 def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None) -> dict:
@@ -546,19 +550,81 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
             df["employee_id"] = df["employee_id"].astype(str).str.strip()
         return df
 
-    # ---- NRR: computed from cs_book_of_business.csv + InputData.csv ----
-    from src.cs_nrr_loader import compute_cs_nrr
-    print("[Pipeline] CS: computing NRR from Book of Business + InputData...")
-    nrr, nrr_breakdown = compute_cs_nrr(data_dir, employees_df if employees_df is not None else pd.DataFrame())
-    csat_sent   = _load_csat_sent(data_dir, employees_df)
-    csat_scores = _load_csat_scores(data_dir, employees_df)
-    credits    = _load_credits(data_dir, employees_df)
-    referrals    = _read("cs_referrals.csv",    parse_dates=["date"])
-    nrr_targets  = _read("cs_nrr_targets.csv")
+    from src.cs_nrr_loader import compute_cs_nrr, compute_cs_lead_nrr, compute_cs_lead_multi_year_acv
+    employees_safe = employees_df if employees_df is not None else pd.DataFrame()
 
-    # Add month column to referrals (first of the month from date)
+    # ---- NRR: individual CSAs ----
+    print("[Pipeline] CS: computing NRR from Book of Business + InputData...")
+    nrr, nrr_breakdown = compute_cs_nrr(data_dir, employees_safe)
+
+    # ---- NRR: team lead aggregates ----
+    print("[Pipeline] CS: computing team-lead aggregate NRR...")
+    lead_nrr, lead_nrr_bkd = compute_cs_lead_nrr(data_dir, employees_safe)
+    if not lead_nrr.empty:
+        nrr = pd.concat([nrr, lead_nrr], ignore_index=True)
+    if not lead_nrr_bkd.empty:
+        nrr_breakdown = pd.concat([nrr_breakdown, lead_nrr_bkd], ignore_index=True)
+
+    # ---- Multi-year ACV for team leads ----
+    print("[Pipeline] CS: computing multi-year ACV for team leads...")
+    cs_lead_multi_year_acv = compute_cs_lead_multi_year_acv(data_dir, employees_safe)
+
+    # ---- CSAT and credits (include cs_lead employees in name matching) ----
+    csat_sent   = _load_csat_sent(data_dir, employees_safe)
+    csat_scores = _load_csat_scores(data_dir, employees_safe)
+    credits, credits_raw = _load_credits(data_dir, employees_safe)
+    referrals   = _read("cs_referrals.csv", parse_dates=["date"])
+    nrr_targets = _read("cs_nrr_targets.csv")
+
+    # Add month column to referrals
     if not referrals.empty and "date" in referrals.columns:
         referrals["month"] = referrals["date"].dt.to_period("M").dt.to_timestamp()
+
+    # ---- Team-lead aggregate CSAT + Credits ----
+    if not employees_safe.empty:
+        cs_leads = employees_safe[employees_safe["role"] == "cs_lead"]
+        for _, lead in cs_leads.iterrows():
+            lead_id    = lead["employee_id"]
+            team_ids   = list(employees_safe[
+                employees_safe["manager_id"] == lead_id
+            ]["employee_id"]) + [lead_id]
+
+            # CSAT sent: sum YTD cumulative counts across team members
+            if not csat_sent.empty:
+                team_sent = csat_sent[csat_sent["employee_id"].isin(team_ids)]
+                if not team_sent.empty:
+                    agg_sent = (
+                        team_sent.groupby(["year", "quarter"])["csats_sent"]
+                        .sum().reset_index()
+                    )
+                    agg_sent["employee_id"] = lead_id
+                    csat_sent = pd.concat([csat_sent, agg_sent], ignore_index=True)
+
+            # CSAT scores: pool all team member scores under lead's employee_id
+            if not csat_scores.empty:
+                team_scr = csat_scores[csat_scores["employee_id"].isin(team_ids)].copy()
+                if not team_scr.empty:
+                    team_scr["employee_id"] = lead_id
+                    csat_scores = pd.concat([csat_scores, team_scr], ignore_index=True)
+
+            # Credits: re-aggregate raw allocated/used across team members
+            if not credits_raw.empty:
+                team_cr = credits_raw[credits_raw["employee_id"].isin(team_ids)]
+                if not team_cr.empty:
+                    agg_cr = (
+                        team_cr.groupby(["year", "quarter"])
+                        .agg(total_allocated=("total_allocated", "sum"),
+                             total_used=("total_used", "sum"))
+                        .reset_index()
+                    )
+                    agg_cr["employee_id"] = lead_id
+                    agg_cr["credits_used_pct"] = agg_cr.apply(
+                        lambda r: 100.0 if r["total_allocated"] == 0
+                        else round(r["total_used"] / r["total_allocated"] * 100, 4),
+                        axis=1,
+                    )
+                    lead_credits = agg_cr[["employee_id", "year", "quarter", "credits_used_pct"]]
+                    credits = pd.concat([credits, lead_credits], ignore_index=True)
 
     # Normalise year/quarter columns
     for df in (nrr,):
@@ -567,19 +633,19 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
 
-    # Normalise nrr_targets
     if not nrr_targets.empty:
         nrr_targets["year"]           = pd.to_numeric(nrr_targets["year"],           errors="coerce").astype("Int64")
         nrr_targets["nrr_target_pct"] = pd.to_numeric(nrr_targets["nrr_target_pct"], errors="coerce")
 
     return {
-        "nrr":           nrr,
-        "nrr_breakdown": nrr_breakdown,
-        "nrr_targets":   nrr_targets,
-        "csat_sent":     csat_sent,
-        "csat_scores":   csat_scores,
-        "credits":       credits,
-        "referrals":     referrals,
+        "nrr":                    nrr,
+        "nrr_breakdown":          nrr_breakdown,
+        "nrr_targets":            nrr_targets,
+        "csat_sent":              csat_sent,
+        "csat_scores":            csat_scores,
+        "credits":                credits,
+        "referrals":              referrals,
+        "cs_lead_multi_year_acv": cs_lead_multi_year_acv,
     }
 
 

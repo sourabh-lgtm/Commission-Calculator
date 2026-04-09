@@ -36,6 +36,9 @@ _TITLE_RULES: list[tuple[str, str]] = [
     ("senior account manager", "am"),
     ("account manager",        "am"),
 
+    # CS Team Lead (check before generic "climate strategy" catch-all)
+    ("climate strategy team lead",         "cs_lead"),
+
     # Climate Strategy variants (cs role — commissioned)
     # Check longer/more-specific titles first to avoid false matches
     ("lead climate strategy expert",       "cs"),
