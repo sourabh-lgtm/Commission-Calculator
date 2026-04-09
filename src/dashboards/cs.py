@@ -97,10 +97,9 @@ _ROLE_JS = """
 // CS — role init + tab dispatch
 // ============================================================
 
-// Team Lead filter — repopulates sd-emp dropdown based on selected lead
-function onCSTeamLeadChange() {
-  const leadId = document.getElementById('cs-team-lead').value;
-  const el = document.getElementById('sd-emp');
+// Team Lead filter — shared helper used by both individual and workings tabs
+function _filterEmpByLead(empSelectId, leadId, onLoad) {
+  const el = document.getElementById(empSelectId);
   if (!el) return;
   const prev = el.value;
   el.innerHTML = '';
@@ -112,11 +111,42 @@ function onCSTeamLeadChange() {
     el.appendChild(opt);
   });
   if (filtered.some(e => e.employee_id === prev)) el.value = prev;
-  if (el.options.length > 0) loadCSIndividual();
+  if (el.options.length > 0) onLoad();
+}
+
+function onCSTeamLeadChange() {
+  const leadId = document.getElementById('cs-team-lead').value;
+  _filterEmpByLead('sd-emp', leadId, loadCSIndividual);
+}
+
+function onWKTeamLeadChange() {
+  const leadId = document.getElementById('wk-team-lead').value;
+  _filterEmpByLead('wk-emp', leadId, loadWorkings);
+}
+
+function _csTeamLeadOptions() {
+  return '<option value="">All Advisors</option>' +
+    '<option value="UK22">Johnny McCreesh</option>' +
+    '<option value="161">Delphine Froment</option>' +
+    '<option value="UK46">Riad Samir Wakim</option>';
+}
+
+function _injectTeamLeadDropdown(controlsSelector, selectId, onChangeFn) {
+  const controls = document.querySelector(controlsSelector);
+  if (!controls || document.getElementById(selectId)) return;
+  const lbl = document.createElement('label'); lbl.textContent = 'Team Lead';
+  const sel = document.createElement('select'); sel.id = selectId;
+  sel.innerHTML = _csTeamLeadOptions();
+  sel.addEventListener('change', onChangeFn);
+  controls.insertBefore(sel, controls.firstChild);
+  controls.insertBefore(lbl, controls.firstChild);
 }
 
 async function onRoleInit() {
   rebuildEmpDropdowns();
+
+  // Inject team lead dropdowns into individual and workings tabs
+  _injectTeamLeadDropdown('#tab-workings .controls', 'wk-team-lead', onWKTeamLeadChange);
 
   const curYr = new Date().getFullYear();
   ['cs-qs-year','ps-year','ac-year'].forEach(id => {
