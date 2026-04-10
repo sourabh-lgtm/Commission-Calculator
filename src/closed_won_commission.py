@@ -313,7 +313,13 @@ def build_closed_won_commission(
     # ------------------------------------------------------------------
     # 4. Match SDR name → employee_id
     # ------------------------------------------------------------------
-    sdr_emps = employees[employees["role"] == "sdr"][["employee_id", "name"]].copy()
+    # Include sdr_lead so that team leads who generate closed-won ACV are matched.
+    # drop_duplicates by name prevents double-rows for role-split employees.
+    sdr_emps = (
+        employees[employees["role"].isin(["sdr", "sdr_lead"])][["employee_id", "name"]]
+        .drop_duplicates(subset=["name"])
+        .copy()
+    )
     sdr_emps["name_lower"] = sdr_emps["name"].str.strip().str.lower()
     opps["_sdr_lower"] = opps["SDR"].astype(str).str.strip().str.lower()
 

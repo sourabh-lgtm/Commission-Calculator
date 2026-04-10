@@ -97,6 +97,9 @@ def _get_managed_sdr_ids(
             ]["employee_id"].astype(str))
             managed_ids |= other_reports
 
+    # Include the lead themselves — sdr_leads also log SAOs directly
+    managed_ids.add(str(emp_id))
+
     return managed_ids
 
 

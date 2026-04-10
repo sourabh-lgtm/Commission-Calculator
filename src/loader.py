@@ -129,7 +129,13 @@ def load_sao_commission_data(data_dir: str, employees: pd.DataFrame) -> pd.DataF
         return _empty_sao_df()
 
     # --- 5. Match SDR name → employee_id ---
-    sdr_employees = employees[employees["role"] == "sdr"][["employee_id", "name"]].copy()
+    # Include sdr_lead so that team leads who log SAOs themselves are matched.
+    # drop_duplicates by name prevents double-rows for role-split employees.
+    sdr_employees = (
+        employees[employees["role"].isin(["sdr", "sdr_lead"])][["employee_id", "name"]]
+        .drop_duplicates(subset=["name"])
+        .copy()
+    )
     # Case-insensitive match
     sdr_employees["name_lower"] = sdr_employees["name"].str.strip().str.lower()
     df["_sdr_lower"] = df["SDR"].str.strip().str.lower()
