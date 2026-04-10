@@ -140,7 +140,11 @@ def compute_cs_nrr(
         inp.get("Non-Recurring TCV (converted)", pd.Series(dtype=str)),
         errors="coerce",
     ).fillna(0)
-    inp["_close_date"]    = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
+    inp["_close_date"]      = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
+    inp["_contract_start"]  = pd.to_datetime(
+        inp.get("Contract Start Date", pd.Series(dtype=str)),
+        format="%d/%m/%Y", errors="coerce",
+    )
 
     # Deduplicate by Opportunity Id — keep one row per opp (product lines inflate counts)
     inp_dedup = (
@@ -247,7 +251,21 @@ def compute_cs_nrr(
             ]["_attainment"].sum()
 
             # ---- Synthetic churn: contracts expired in YTD window with no renewal record ----
-            inp_q_renewal_accts = set(inp_q[inp_q["_type"] == "Renewal"]["_account_id_15"].tolist())
+            # A prior-period renewal (e.g. closed in 2025 but renewal_date in 2026) is
+            # valid only if its Contract Start Date >= the BoB renewal_date, meaning the
+            # new contract begins when (or after) the old one ends.  We check all of
+            # InputData — not just YTD — so early renewals are not missed.
+            #
+            # Build per-account map: account_id → latest contract_start across all
+            # renewal opps in InputData for this CSA's accounts.
+            csa_renewals = inp_csa[
+                (inp_csa["_type"] == "Renewal") &
+                inp_csa["_contract_start"].notna()
+            ]
+            acct_max_contract_start: dict[str, pd.Timestamp] = (
+                csa_renewals.groupby("_account_id_15")["_contract_start"].max().to_dict()
+            )
+
             synth_churns: dict[str, float] = {}
             for acct_id, arr in acct_arr.items():
                 rd = acct_renewal.get(acct_id)
@@ -255,8 +273,11 @@ def compute_cs_nrr(
                     continue
                 if not (ytd_start <= rd <= q_end):
                     continue
-                if acct_id in inp_q_renewal_accts:
-                    continue  # Already has a real renewal/churn record
+                # If any renewal's new contract starts on/after the BoB renewal date,
+                # the contract has already been renewed — skip synthetic churn.
+                max_cs = acct_max_contract_start.get(acct_id)
+                if max_cs is not None and max_cs >= rd:
+                    continue
                 synth_churns[acct_id] = -arr
                 print(
                     f"[NRR] Synthetic churn: {csa_name} "
@@ -389,7 +410,11 @@ def compute_cs_lead_nrr(
         inp.get("Non-Recurring TCV (converted)", pd.Series(dtype=str)),
         errors="coerce",
     ).fillna(0)
-    inp["_close_date"]    = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
+    inp["_close_date"]     = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
+    inp["_contract_start"] = pd.to_datetime(
+        inp.get("Contract Start Date", pd.Series(dtype=str)),
+        format="%d/%m/%Y", errors="coerce",
+    )
     inp_dedup = (
         inp.dropna(subset=["_close_date"])
            .drop_duplicates(subset=["Opportunity Id Casesafe"])
@@ -493,7 +518,18 @@ def compute_cs_lead_nrr(
             ]["_attainment"].sum()
 
             # ---- Synthetic churn: contracts expired in YTD window with no renewal record ----
-            inp_q_renewal_accts = set(inp_q[inp_q["_type"] == "Renewal"]["_account_id_15"].tolist())
+            # A prior-period renewal (e.g. closed in 2025 but renewal_date in 2026) is
+            # valid only if its Contract Start Date >= the BoB renewal_date, meaning the
+            # new contract begins when (or after) the old one ends.  We check all of
+            # InputData — not just YTD — so early renewals are not missed.
+            team_renewals = inp_team[
+                (inp_team["_type"] == "Renewal") &
+                inp_team["_contract_start"].notna()
+            ]
+            team_acct_max_contract_start: dict[str, pd.Timestamp] = (
+                team_renewals.groupby("_account_id_15")["_contract_start"].max().to_dict()
+            )
+
             synth_churns_lead: dict[str, float] = {}
             for acct_id, arr in acct_arr.items():
                 rd = acct_renewal_lead.get(acct_id)
@@ -501,8 +537,11 @@ def compute_cs_lead_nrr(
                     continue
                 if not (ytd_start <= rd <= q_end):
                     continue
-                if acct_id in inp_q_renewal_accts:
-                    continue  # Already has a real renewal/churn record
+                # If any renewal's new contract starts on/after the BoB renewal date,
+                # the contract has already been renewed — skip synthetic churn.
+                max_cs = team_acct_max_contract_start.get(acct_id)
+                if max_cs is not None and max_cs >= rd:
+                    continue
                 synth_churns_lead[acct_id] = -arr
                 print(
                     f"[NRR Lead] Synthetic churn: {lead['name']} "
