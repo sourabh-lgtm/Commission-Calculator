@@ -57,75 +57,47 @@ def _tiered_payout(attainment: float) -> float:
     return 0.0
 
 
-def _get_managed_sdr_month_map(
+def _get_managed_sdr_ids(
     emp_id: str,
     employees_df: pd.DataFrame,
-    quarter_months_list: list[pd.Timestamp],
+    quarter_start: pd.Timestamp,
     quarter_end: pd.Timestamp,
-) -> dict[pd.Timestamp, set[str]]:
-    """Return {month → set[employee_id]} for this lead's quarterly commission.
+) -> set[str]:
+    """Return SDR employee_ids that count toward this lead's quarterly commission.
 
-    Attribution rules (month-level granularity):
-    - Direct reports count from the month this lead's employment started
-      (clamped to the quarter start), so a mid-quarter hire only earns from
-      their own start month onwards.
-    - SDRs currently under another sdr_lead who was hired MID-quarter count
-      for this (incumbent) lead in all months BEFORE that new lead's start
-      month — no double-counting with the new lead.
+    Includes:
+    - Direct current reports (manager_id == emp_id, role sdr/sdr_lead)
+    - SDRs currently under OTHER sdr_leads who were hired mid-quarter: those
+      SDRs were under this lead before the new hire joined, so they count for
+      the full quarter's team performance.
     """
-    month_to_ids: dict[pd.Timestamp, set[str]] = {m: set() for m in quarter_months_list}
-
     if employees_df.empty or "manager_id" not in employees_df.columns:
-        return month_to_ids
+        return set()
 
-    # ---- This lead's own active-from month within the quarter ----
-    lead_start_month = quarter_months_list[0]   # default: full quarter
-    if "employment_start" in employees_df.columns:
-        this_rows = employees_df[
-            (employees_df["employee_id"].astype(str) == str(emp_id))
-            & (employees_df["role"] == "sdr_lead")
-        ]
-        if not this_rows.empty:
-            emp_start = this_rows["employment_start"].iloc[0]
-            if pd.notna(emp_start):
-                # Normalize to month-start; clamp so pre-quarter hires get all months
-                lead_start_month = max(
-                    pd.Timestamp(emp_start).replace(day=1),
-                    quarter_months_list[0],
-                )
-
-    # ---- Direct current reports: active from lead_start_month onwards ----
-    direct_mask = (
+    # Direct current reports
+    mask = (
         employees_df["manager_id"].astype(str) == str(emp_id)
     ) & employees_df["role"].isin(["sdr", "sdr_lead"])
-    direct_ids = set(employees_df.loc[direct_mask, "employee_id"].astype(str))
-    for m in quarter_months_list:
-        if m >= lead_start_month:
-            month_to_ids[m] |= direct_ids
+    managed_ids: set[str] = set(employees_df.loc[mask, "employee_id"].astype(str))
 
-    # ---- SDRs transferred to a mid-quarter hired lead ----
-    # Those SDRs belonged to this lead before the new lead joined, so count
-    # them for months BEFORE the new lead's start month only.
+    # Other SDR leads hired during this quarter → their SDRs previously rolled
+    # up under this lead, so include them for the full quarter.
     if "employment_start" in employees_df.columns:
-        q_start = quarter_months_list[0]
         mid_q_leads = employees_df[
             employees_df["role"].isin(["sdr_lead"])
             & (employees_df["employee_id"].astype(str) != str(emp_id))
             & employees_df["employment_start"].notna()
-            & (employees_df["employment_start"] >= q_start)
+            & (employees_df["employment_start"] >= quarter_start)
             & (employees_df["employment_start"] <= quarter_end)
         ]
         for _, other_lead in mid_q_leads.iterrows():
-            transition_month = pd.Timestamp(other_lead["employment_start"]).replace(day=1)
             other_reports = set(employees_df[
                 (employees_df["manager_id"].astype(str) == str(other_lead["employee_id"]))
                 & employees_df["role"].isin(["sdr", "sdr_lead"])
             ]["employee_id"].astype(str))
-            for m in quarter_months_list:
-                if lead_start_month <= m < transition_month:
-                    month_to_ids[m] |= other_reports
+            managed_ids |= other_reports
 
-    return month_to_ids
+    return managed_ids
 
 
 class SDRLeadCommissionPlan(BaseCommissionPlan):
@@ -224,40 +196,34 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
                 sao_target_q         = int(row["sao_team_target_q"].iloc[0])
                 acv_target_eur_q     = float(row["acv_team_target_eur_q"].iloc[0])
 
-        # --- Resolve per-month managed SDR sets ---
-        employees_df  = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        month_emp_map = _get_managed_sdr_month_map(str(emp_id), employees_df, months, q_end)
+        # --- Resolve managed SDR employee IDs (current reports + mid-quarter hires' reports) ---
+        employees_df = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
+        managed_ids = _get_managed_sdr_ids(str(emp_id), employees_df, months[0], q_end)
 
-        # --- Measure 1: Team SAO count ---
+        # --- Measure 1: Team SAO count (only managed SDRs) ---
         q_sao_count = 0
-        if not activities.empty and "month" in activities.columns and "employee_id" in activities.columns:
-            for m, emp_ids in month_emp_map.items():
-                if emp_ids:
-                    q_sao_count += int(
-                        activities[
-                            (activities["month"] == m)
-                            & activities["employee_id"].astype(str).isin(emp_ids)
-                        ].shape[0]
-                    )
+        if not activities.empty and "month" in activities.columns:
+            team_saos = activities[activities["month"].isin(months)]
+            if managed_ids and "employee_id" in team_saos.columns:
+                team_saos = team_saos[team_saos["employee_id"].astype(str).isin(managed_ids)]
+            q_sao_count = len(team_saos)
 
         sao_attainment = q_sao_count / sao_target_q if sao_target_q > 0 else 0.0
         sao_payout_pct = _tiered_payout(sao_attainment)
         sao_pot        = quarterly_bonus_gbp * MEASURE_WEIGHTS["sao"]
         sao_bonus      = round(sao_pot * sao_payout_pct, 2)
 
-        # --- Measure 2: Team closed-won ACV (EUR) ---
+        # --- Measure 2: Team closed-won ACV (EUR, only managed SDRs) ---
         q_acv_eur = 0.0
         sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        if not sdr_cw.empty and "month" in sdr_cw.columns and "employee_id" in sdr_cw.columns:
-            for m, emp_ids in month_emp_map.items():
-                if emp_ids:
-                    month_cw = sdr_cw[
-                        (sdr_cw["month"] == m)
-                        & sdr_cw["employee_id"].astype(str).isin(emp_ids)
-                    ]
-                    if "is_forecast" in month_cw.columns:
-                        month_cw = month_cw[~month_cw["is_forecast"]]
-                    q_acv_eur += float(month_cw["acv_eur"].sum())
+        if not sdr_cw.empty and "month" in sdr_cw.columns:
+            team_cw = sdr_cw[sdr_cw["month"].isin(months)]
+            if managed_ids and "employee_id" in team_cw.columns:
+                team_cw = team_cw[team_cw["employee_id"].astype(str).isin(managed_ids)]
+            # Only count actual invoices (not forecast) to avoid double-counting
+            if "is_forecast" in team_cw.columns:
+                team_cw = team_cw[~team_cw["is_forecast"]]
+            q_acv_eur = float(team_cw["acv_eur"].sum())
 
         acv_attainment = q_acv_eur / acv_target_eur_q if acv_target_eur_q > 0 else 0.0
         acv_payout_pct = _tiered_payout(acv_attainment)
@@ -344,39 +310,32 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
                 sao_target_q        = int(row["sao_team_target_q"].iloc[0])
                 acv_target_eur_q    = float(row["acv_team_target_eur_q"].iloc[0])
 
-        # Resolve per-month managed SDR sets
-        employees_df  = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        month_emp_map = _get_managed_sdr_month_map(str(emp_id), employees_df, months, q_end)
+        # Resolve managed SDR employee IDs (current reports + mid-quarter hires' reports)
+        employees_df = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
+        managed_ids = _get_managed_sdr_ids(str(emp_id), employees_df, months[0], q_end)
 
-        # Team SAO count
+        # Team SAO count (only managed SDRs)
         q_sao_count = 0
-        if not activities.empty and "month" in activities.columns and "employee_id" in activities.columns:
-            for m, emp_ids in month_emp_map.items():
-                if emp_ids:
-                    q_sao_count += int(
-                        activities[
-                            (activities["month"] == m)
-                            & activities["employee_id"].astype(str).isin(emp_ids)
-                        ].shape[0]
-                    )
+        if not activities.empty and "month" in activities.columns:
+            team_saos = activities[activities["month"].isin(months)]
+            if managed_ids and "employee_id" in team_saos.columns:
+                team_saos = team_saos[team_saos["employee_id"].astype(str).isin(managed_ids)]
+            q_sao_count = len(team_saos)
 
         sao_attainment = q_sao_count / sao_target_q if sao_target_q > 0 else 0.0
         sao_payout_pct = _tiered_payout(sao_attainment)
         sao_bonus      = round(quarterly_bonus_gbp * MEASURE_WEIGHTS["sao"] * sao_payout_pct, 2)
 
-        # Team ACV
+        # Team ACV (only managed SDRs)
         q_acv_eur = 0.0
         sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        if not sdr_cw.empty and "month" in sdr_cw.columns and "employee_id" in sdr_cw.columns:
-            for m, emp_ids in month_emp_map.items():
-                if emp_ids:
-                    month_cw = sdr_cw[
-                        (sdr_cw["month"] == m)
-                        & sdr_cw["employee_id"].astype(str).isin(emp_ids)
-                    ]
-                    if "is_forecast" in month_cw.columns:
-                        month_cw = month_cw[~month_cw["is_forecast"]]
-                    q_acv_eur += float(month_cw["acv_eur"].sum())
+        if not sdr_cw.empty and "month" in sdr_cw.columns:
+            team_cw = sdr_cw[sdr_cw["month"].isin(months)]
+            if managed_ids and "employee_id" in team_cw.columns:
+                team_cw = team_cw[team_cw["employee_id"].astype(str).isin(managed_ids)]
+            if "is_forecast" in team_cw.columns:
+                team_cw = team_cw[~team_cw["is_forecast"]]
+            q_acv_eur = float(team_cw["acv_eur"].sum())
 
         acv_attainment = q_acv_eur / acv_target_eur_q if acv_target_eur_q > 0 else 0.0
         acv_payout_pct = _tiered_payout(acv_attainment)
