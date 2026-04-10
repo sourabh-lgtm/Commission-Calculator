@@ -13,7 +13,7 @@ def team_overview(model, month: pd.Timestamp) -> dict:
 
     df = model.commission_detail[
         (model.commission_detail["month"] == month) &
-        (model.commission_detail["role"] == "sdr")
+        (model.commission_detail["role"].isin(["sdr", "sdr_lead"]))
     ].copy()
 
     # EUR conversion: total_commission is in local currency; fx_rate is EUR->local

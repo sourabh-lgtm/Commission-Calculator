@@ -19,7 +19,7 @@ from src.pipeline import run_pipeline, CommissionModel
 from src.reports import (
     team_overview, sdr_detail, monthly_summary,
     quarterly_summary, commission_workings,
-    employee_list, available_months,
+    employee_list, available_months, org_chart,
     payroll_summary, accrual_summary,
     cs_overview, cs_quarterly,
     ae_overview, ae_detail, ae_monthly,
@@ -114,6 +114,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/employees":
             self._respond(employee_list(MODEL))
+            return
+
+        if path == "/api/org_chart":
+            self._respond(org_chart(MODEL))
             return
 
         if path == "/api/team_overview":

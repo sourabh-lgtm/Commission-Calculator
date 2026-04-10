@@ -48,7 +48,7 @@ def generate_statement(
     # ------------------------------------------------------------------
     # PAGE 2 — Summary  (role-specific)
     # ------------------------------------------------------------------
-    if role in ("cs", "cs_lead"):
+    if role in ("cs", "cs_lead", "cs_director"):
         story.extend(_cs_summary_page(employee, period_label, summary, currency))
     elif role == "ae":
         story.extend(_ae_summary_page(employee, period_label, summary, accelerator, currency))
@@ -59,7 +59,7 @@ def generate_statement(
     # ------------------------------------------------------------------
     # PAGE 3+ — Full Workings  (role-specific)
     # ------------------------------------------------------------------
-    if role in ("cs", "cs_lead"):
+    if role in ("cs", "cs_lead", "cs_director"):
         story.extend(_cs_workings_page(employee, period_label, workings_rows, summary, currency))
     elif role == "ae":
         story.extend(_ae_workings_page(employee, period_label, workings_rows, accelerator, currency))

@@ -385,7 +385,7 @@ def accrual_summary(model, year: int) -> dict:
 
 def employee_list(model) -> list[dict]:
     commissioned = model.employees[
-        model.employees["role"].isin(["sdr", "cs", "cs_lead", "ae"])
+        model.employees["role"].isin(["sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae"])
     ].copy()
     # AEs and SDRs: only show those active on or after 2026-01-01 (exclude pre-FY26 leavers)
     if "plan_end_date" in commissioned.columns:
@@ -397,6 +397,21 @@ def employee_list(model) -> list[dict]:
     if "manager_id" in commissioned.columns:
         cols.append("manager_id")
     return df_to_records(commissioned[cols])
+
+
+# ---------------------------------------------------------------------------
+# Org chart — all employees for hierarchy building in the frontend
+# ---------------------------------------------------------------------------
+
+def org_chart(model) -> list[dict]:
+    """Return all employees (commissioned + non-commissioned) for org-tree building.
+
+    Includes managers, directors, VPs etc. so the frontend can traverse the
+    full hierarchy using manager_id links.
+    """
+    emp = model.employees.copy()
+    cols = [c for c in ["employee_id", "name", "role", "manager_id"] if c in emp.columns]
+    return df_to_records(emp[cols])
 
 
 # ---------------------------------------------------------------------------

@@ -73,13 +73,8 @@ _TABS_HTML = """
   <div class="page-title">Advisor Detail</div>
   <p class="page-sub">Quarter-by-quarter performance for an individual advisor</p>
   <div class="controls">
-    <label>Team Lead</label>
-    <select id="cs-team-lead" onchange="onCSTeamLeadChange()">
-      <option value="">All Advisors</option>
-      <option value="UK22">Johnny McCreesh</option>
-      <option value="161">Delphine Froment</option>
-      <option value="UK46">Riad Samir Wakim</option>
-    </select>
+    <label>Manager</label>
+    <select id="cs-team-lead" onchange="onCSTeamLeadChange()"></select>
     <label>Advisor</label>
     <select id="sd-emp" onchange="loadCSIndividual()"></select>
   </div>
@@ -97,23 +92,36 @@ _ROLE_JS = """
 // CS — role init + tab dispatch
 // ============================================================
 
-// Team Lead filter — shared helper used by both individual and workings tabs
-// Riad (UK46) manages the two CS Team Leads (Delphine & Johnny), so when Riad
-// is selected all cs_lead employees are shown regardless of manager_id in Humaans.
-const _RIAD_ID = 'UK46';
+// Build manager dropdown options from the org chart.
+// Shows any person in orgNodes who is a direct manager of at least one
+// CS-related employee (cs, cs_lead, cs_director).
+function _csManagerOptions() {
+  const csRoles = new Set(['cs', 'cs_lead', 'cs_director']);
+  const managerIds = new Set(
+    orgNodes.filter(n => csRoles.has(n.role) && n.manager_id).map(n => n.manager_id)
+  );
+  const mgrs = orgNodes.filter(n => managerIds.has(n.employee_id));
+  const roleOrder = {cs_director: 0, cs_lead: 1};
+  mgrs.sort((a, b) => (roleOrder[a.role] ?? 9) - (roleOrder[b.role] ?? 9) || a.name.localeCompare(b.name));
+  return '<option value="">All</option>' +
+    mgrs.map(n => `<option value="${n.employee_id}">${n.name}</option>`).join('');
+}
 
-function _filterEmpByLead(empSelectId, leadId, onLoad) {
+// Filter the employee select to those who are descendants of the chosen manager.
+// Uses getDescendants() from shared JS which traverses the full org tree.
+function _filterEmpByManager(empSelectId, managerId, onLoad) {
   const el = document.getElementById(empSelectId);
   if (!el) return;
   const prev = el.value;
   el.innerHTML = '';
-  const csEmps = employees.filter(e => e.role === 'cs' || e.role === 'cs_lead');
-  const filtered = leadId
-    ? csEmps.filter(e =>
-        (e.manager_id || '') === leadId ||
-        (leadId === _RIAD_ID && e.role === 'cs_lead')
-      )
-    : csEmps;
+  const csEmps = employees.filter(e => e.role === 'cs' || e.role === 'cs_lead' || e.role === 'cs_director');
+  let filtered;
+  if (managerId) {
+    const desc = getDescendants(managerId);
+    filtered = csEmps.filter(e => desc.has(e.employee_id));
+  } else {
+    filtered = csEmps;
+  }
   filtered.forEach(e => {
     const opt = document.createElement('option');
     opt.value = e.employee_id; opt.text = e.name;
@@ -124,28 +132,21 @@ function _filterEmpByLead(empSelectId, leadId, onLoad) {
 }
 
 function onCSTeamLeadChange() {
-  const leadId = document.getElementById('cs-team-lead').value;
-  _filterEmpByLead('sd-emp', leadId, loadCSIndividual);
+  const managerId = document.getElementById('cs-team-lead').value;
+  _filterEmpByManager('sd-emp', managerId, loadCSIndividual);
 }
 
 function onWKTeamLeadChange() {
-  const leadId = document.getElementById('wk-team-lead').value;
-  _filterEmpByLead('wk-emp', leadId, loadWorkings);
+  const managerId = document.getElementById('wk-team-lead').value;
+  _filterEmpByManager('wk-emp', managerId, loadWorkings);
 }
 
-function _csTeamLeadOptions() {
-  return '<option value="">All Advisors</option>' +
-    '<option value="UK22">Johnny McCreesh</option>' +
-    '<option value="161">Delphine Froment</option>' +
-    '<option value="UK46">Riad Samir Wakim</option>';
-}
-
-function _injectTeamLeadDropdown(controlsSelector, selectId, onChangeFn) {
+function _injectManagerDropdown(controlsSelector, selectId, onChangeFn) {
   const controls = document.querySelector(controlsSelector);
   if (!controls || document.getElementById(selectId)) return;
-  const lbl = document.createElement('label'); lbl.textContent = 'Team Lead';
+  const lbl = document.createElement('label'); lbl.textContent = 'Manager';
   const sel = document.createElement('select'); sel.id = selectId;
-  sel.innerHTML = _csTeamLeadOptions();
+  sel.innerHTML = _csManagerOptions();
   sel.addEventListener('change', onChangeFn);
   controls.insertBefore(sel, controls.firstChild);
   controls.insertBefore(lbl, controls.firstChild);
@@ -154,8 +155,17 @@ function _injectTeamLeadDropdown(controlsSelector, selectId, onChangeFn) {
 async function onRoleInit() {
   rebuildEmpDropdowns();
 
-  // Inject team lead dropdowns into individual and workings tabs
-  _injectTeamLeadDropdown('#tab-workings .controls', 'wk-team-lead', onWKTeamLeadChange);
+  // Populate manager dropdown from org chart (dynamic — no hardcoded names)
+  const csTLSel = document.getElementById('cs-team-lead');
+  if (csTLSel) csTLSel.innerHTML = _csManagerOptions();
+
+  // Initialise the advisor dropdown with all CS roles (cs + cs_lead + cs_director).
+  // rebuildEmpDropdowns() only includes role==='cs' via the global role filter,
+  // so we override it here to also show team leads and the director.
+  _filterEmpByManager('sd-emp', '', () => {});
+
+  // Inject manager dropdown into workings tab
+  _injectManagerDropdown('#tab-workings .controls', 'wk-team-lead', onWKTeamLeadChange);
 
   const curYr = new Date().getFullYear();
   ['cs-qs-year','ps-year','ac-year'].forEach(id => {
@@ -333,7 +343,7 @@ async function loadCSIndividual() {
   renderLine('cs-ind-chart', rows.map(r => r.month), rows.map(r => r.total_commission), 'Total Payout');
 
   // Table — show CS-relevant fields
-  const isLead = emp.role === 'cs_lead';
+  const isLead = emp.role === 'cs_lead' || emp.role === 'cs_director';
   const heads = ['Month','Q','NRR Bonus','CSAT Bonus','Credits Bonus','NRR Accel',
     ...(isLead ? ['Multi-yr ACV'] : []),
     'Ref Comm','Total'];

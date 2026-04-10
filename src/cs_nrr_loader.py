@@ -601,6 +601,254 @@ def compute_cs_lead_nrr(
 
 
 # ---------------------------------------------------------------------------
+# CS Director — aggregate NRR across ALL CSAs
+# ---------------------------------------------------------------------------
+
+def compute_cs_director_nrr(
+    data_dir: str,
+    employees_df: pd.DataFrame,
+    year: int | None = None,
+    quarter: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Compute aggregate NRR for the CS Director.
+
+    Pools ALL accounts from ALL cs, cs_lead, and cs_director employees' books
+    of business — the entire CS team's portfolio — and computes NRR on the
+    combined pool.
+
+    Returns (nrr_df, breakdown_df) with the director's employee_id as key,
+    ready to be appended to the individual CSA and team-lead nrr tables.
+    """
+    _empty_nrr = pd.DataFrame(columns=["employee_id", "year", "quarter", "nrr_pct", "total_arr", "nrr_numerator"])
+    _empty_bkd = pd.DataFrame(columns=[
+        "employee_id", "year", "quarter", "account_id", "account_name",
+        "base_arr", "add_on", "one_off", "upsell_downsell", "churn",
+    ])
+
+    directors = employees_df[employees_df["role"] == "cs_director"]
+    if directors.empty:
+        return _empty_nrr, _empty_bkd
+
+    bob_path   = os.path.join(data_dir, "cs_book_of_business.csv")
+    input_path = os.path.join(data_dir, "InputData.csv")
+    if not os.path.exists(bob_path) or not os.path.exists(input_path):
+        return _empty_nrr, _empty_bkd
+
+    bob = _read_csv(bob_path)
+    arr_col  = bob.columns[9]   # Flat Renewal ACV (converted)
+    id_col   = bob.columns[11]  # Account ID
+    csa_col  = bob.columns[19]  # CSA 2026
+    name_col = bob.columns[5]   # Account Name
+
+    renewal_date_col = bob.columns[12]  # "Renewal Date"
+
+    bob["_account_id_15"] = bob[id_col].astype(str).str.strip().str[:15]
+    bob["_csa_name"]      = bob[csa_col].astype(str).str.strip()
+    bob["_account_name"]  = bob[name_col].astype(str).str.strip()
+    bob["_renewal_date"]  = pd.to_datetime(
+        bob[renewal_date_col].astype(str), format="%d/%m/%Y", errors="coerce"
+    )
+    bob["_arr"]           = pd.to_numeric(
+        bob[arr_col].astype(str).str.replace(",", "", regex=False),
+        errors="coerce",
+    ).fillna(0)
+    bob = bob[
+        (bob["_csa_name"] != "") & (bob["_csa_name"] != "nan") &
+        (bob["_account_id_15"] != "") & (bob["_account_id_15"] != "nan")
+    ].copy()
+
+    inp = _read_csv(input_path)
+    inp["_account_id_15"] = inp["Account Id Casesafe"].astype(str).str.strip().str[:15]
+    inp["_type"]          = inp["Type"].astype(str).str.strip()
+    inp["_stage"]         = inp["Stage"].astype(str).str.strip()
+    inp["_attainment"]    = pd.to_numeric(inp["Attainment New ACV (converted)"], errors="coerce").fillna(0)
+    inp["_nr_tcv"]        = pd.to_numeric(
+        inp.get("Non-Recurring TCV (converted)", pd.Series(dtype=str)),
+        errors="coerce",
+    ).fillna(0)
+    inp["_close_date"]     = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
+    inp["_contract_start"] = pd.to_datetime(
+        inp.get("Contract Start Date", pd.Series(dtype=str)),
+        format="%d/%m/%Y", errors="coerce",
+    )
+    inp_dedup = (
+        inp.dropna(subset=["_close_date"])
+           .drop_duplicates(subset=["Opportunity Id Casesafe"])
+           .copy()
+    )
+
+    # Name → employee_id for ALL CS roles (cs, cs_lead, cs_director)
+    all_cs = employees_df[employees_df["role"].isin(["cs", "cs_lead", "cs_director"])][["employee_id", "name"]].copy()
+    all_cs["_name_lower"]      = all_cs["name"].str.strip().str.lower()
+    all_cs["_last_name_lower"] = all_cs["_name_lower"].str.split().str[-1]
+    name_to_id: dict[str, str] = {r["_name_lower"]: r["employee_id"] for _, r in all_cs.iterrows()}
+    last_counts = all_cs["_last_name_lower"].value_counts()
+    last_name_to_id: dict[str, str] = {
+        r["_last_name_lower"]: r["employee_id"]
+        for _, r in all_cs.iterrows()
+        if last_counts[r["_last_name_lower"]] == 1
+    }
+    id_to_name_lower: dict[str, str] = {r["employee_id"]: r["_name_lower"] for _, r in all_cs.iterrows()}
+
+    # Determine year-quarter pairs
+    if year is not None and quarter is not None:
+        yq_pairs = [(year, quarter)]
+    else:
+        inp_dedup["_year"]    = inp_dedup["_close_date"].dt.year
+        inp_dedup["_quarter"] = (inp_dedup["_close_date"].dt.month - 1) // 3 + 1
+        yq_pairs = list(
+            inp_dedup[inp_dedup["_year"] >= 2026][["_year", "_quarter"]]
+            .drop_duplicates().sort_values(["_year", "_quarter"])
+            .itertuples(index=False, name=None)
+        )
+
+    if not yq_pairs:
+        return _empty_nrr, _empty_bkd
+
+    acct_name_map: dict[str, str] = (
+        bob.drop_duplicates(subset=["_account_id_15"])
+           .set_index("_account_id_15")["_account_name"]
+           .to_dict()
+    )
+
+    # All employee IDs across the entire CS function
+    all_cs_ids: set[str] = set(all_cs["employee_id"].tolist())
+    # All BoB CSA names (lower) for the entire CS function
+    all_names_lower: set[str] = {id_to_name_lower[i] for i in all_cs_ids if i in id_to_name_lower}
+
+    def _bob_name_matches_all(csa_name: str) -> bool:
+        lower = csa_name.strip().lower()
+        if lower in all_names_lower:
+            return True
+        last = lower.split()[-1] if lower else ""
+        matched_id = last_name_to_id.get(last)
+        return matched_id in all_cs_ids if matched_id else False
+
+    all_bob = bob[bob["_csa_name"].apply(_bob_name_matches_all)].copy()
+    if all_bob.empty:
+        print("[NRR Director] No BoB accounts found for any CS employee — skipping.")
+        return _empty_nrr, _empty_bkd
+
+    total_arr = all_bob["_arr"].sum()
+    if total_arr <= 0:
+        print("[NRR Director] Total ARR = 0 — skipping.")
+        return _empty_nrr, _empty_bkd
+
+    acct_arr: dict[str, float] = all_bob.groupby("_account_id_15")["_arr"].sum().to_dict()
+    acct_ids = set(acct_arr.keys())
+    inp_all  = inp_dedup[inp_dedup["_account_id_15"].isin(acct_ids)].copy()
+
+    acct_renewal: dict[str, pd.Timestamp | None] = {
+        acct_id: (grp["_renewal_date"].dropna().iloc[0]
+                  if not grp["_renewal_date"].dropna().empty else None)
+        for acct_id, grp in all_bob.groupby("_account_id_15")
+    }
+
+    results:   list[dict] = []
+    breakdown: list[dict] = []
+
+    for _, director in directors.iterrows():
+        director_id = director["employee_id"]
+
+        for yr, qt in yq_pairs:
+            ytd_start, _ = _quarter_range(yr, 1)
+            _, q_end     = _quarter_range(yr, qt)
+            inp_q = inp_all[
+                (inp_all["_close_date"] >= ytd_start) &
+                (inp_all["_close_date"] <= q_end)
+            ].copy()
+
+            add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
+            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+            upsell_down = inp_q[
+                (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
+            ]["_attainment"].sum()
+            churn       = inp_q[
+                (inp_q["_type"] == "Renewal") & (inp_q["_stage"] == "Closed Lost")
+            ]["_attainment"].sum()
+
+            # Synthetic churn
+            all_renewals = inp_all[
+                (inp_all["_type"] == "Renewal") &
+                inp_all["_contract_start"].notna()
+            ]
+            acct_max_contract_start: dict[str, pd.Timestamp] = (
+                all_renewals.groupby("_account_id_15")["_contract_start"].max().to_dict()
+            )
+
+            synth_churns: dict[str, float] = {}
+            for acct_id, arr in acct_arr.items():
+                rd = acct_renewal.get(acct_id)
+                if rd is None or pd.isna(rd):
+                    continue
+                if not (ytd_start <= rd <= q_end):
+                    continue
+                max_cs = acct_max_contract_start.get(acct_id)
+                if max_cs is not None and max_cs >= rd:
+                    continue
+                synth_churns[acct_id] = -arr
+                print(
+                    f"[NRR Director] Synthetic churn: {director['name']} "
+                    f"{acct_name_map.get(acct_id, acct_id)} "
+                    f"Q{qt} {yr}  renewal_date={rd.date()}  ARR={arr:,.0f}"
+                )
+            churn += sum(synth_churns.values())
+
+            nrr_numerator = total_arr + add_ons + one_off + upsell_down + churn
+            nrr_pct       = round((nrr_numerator / total_arr) * 100, 4)
+
+            print(
+                f"[NRR Director] {director['name']} Q{qt} {yr}: "
+                f"TotalARR={total_arr:,.0f}  addon={add_ons:,.0f}  one_off={one_off:,.0f}  "
+                f"upsell/down={upsell_down:,.0f}  churn={churn:,.0f}  NRR={nrr_pct:.2f}%"
+            )
+
+            results.append({
+                "employee_id":    director_id,
+                "year":           yr,
+                "quarter":        qt,
+                "nrr_pct":        nrr_pct,
+                "total_arr":      total_arr,
+                "nrr_numerator":  nrr_numerator,
+            })
+
+            for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
+                acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
+                acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
+                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+                acct_upsell  = acct_q[
+                    (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
+                ]["_attainment"].sum()
+                acct_churn   = acct_q[
+                    (acct_q["_type"] == "Renewal") & (acct_q["_stage"] == "Closed Lost")
+                ]["_attainment"].sum()
+
+                if acct_id in synth_churns:
+                    acct_churn += synth_churns[acct_id]
+
+                if acct_addon == 0 and acct_one_off == 0 and acct_upsell == 0 and acct_churn == 0:
+                    continue
+
+                breakdown.append({
+                    "employee_id":    director_id,
+                    "year":           yr,
+                    "quarter":        qt,
+                    "account_id":     acct_id,
+                    "account_name":   acct_name_map.get(acct_id, acct_id),
+                    "base_arr":       base_arr,
+                    "add_on":         acct_addon,
+                    "one_off":        acct_one_off,
+                    "upsell_downsell": acct_upsell,
+                    "churn":          acct_churn,
+                })
+
+    if not results:
+        return _empty_nrr, _empty_bkd
+
+    return pd.DataFrame(results), pd.DataFrame(breakdown) if breakdown else _empty_bkd
+
+
+# ---------------------------------------------------------------------------
 # CS Team Lead — multi-year ACV commission
 # ---------------------------------------------------------------------------
 
@@ -763,6 +1011,160 @@ def compute_cs_lead_multi_year_acv(
             })
             print(
                 f"[MultiYr Lead] {lead['name']}: {r['_opp_name'][:40]} "
+                f"{years:.1f}yr  multi_yr_acv_eur={multi_year_acv:,.0f}"
+            )
+
+    return pd.DataFrame(rows) if rows else empty
+
+
+# ---------------------------------------------------------------------------
+# CS Director — multi-year ACV commission (all CS accounts)
+# ---------------------------------------------------------------------------
+
+def compute_cs_director_multi_year_acv(
+    data_dir: str,
+    employees_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Find renewal deals with multi-year contracts across ALL CSA books.
+
+    For each cs_director employee, pools ALL accounts from ALL cs, cs_lead, and
+    cs_director employees' books of business and computes multi-year ACV on the
+    combined portfolio — 1% commission on the year-2+ portion.
+
+    Returns DataFrame: employee_id, month, opportunity_id, opportunity_name,
+                       acv_eur (multi-year portion), contract_years
+    """
+    empty = pd.DataFrame(columns=[
+        "employee_id", "month", "opportunity_id", "opportunity_name",
+        "acv_eur", "contract_years",
+    ])
+
+    directors = employees_df[employees_df["role"] == "cs_director"]
+    if directors.empty:
+        return empty
+
+    bob_path   = os.path.join(data_dir, "cs_book_of_business.csv")
+    input_path = os.path.join(data_dir, "InputData.csv")
+    if not os.path.exists(bob_path) or not os.path.exists(input_path):
+        return empty
+
+    bob = _read_csv(bob_path)
+    arr_col  = bob.columns[9]   # Flat Renewal ACV (converted)
+    id_col   = bob.columns[11]  # Account ID
+    csa_col  = bob.columns[19]  # CSA 2026
+
+    bob["_account_id_15"] = bob[id_col].astype(str).str.strip().str[:15]
+    bob["_csa_name"]      = bob[csa_col].astype(str).str.strip()
+    bob["_arr"]           = pd.to_numeric(
+        bob[arr_col].astype(str).str.replace(",", "", regex=False),
+        errors="coerce",
+    ).fillna(0)
+    bob = bob[(bob["_csa_name"] != "") & (bob["_csa_name"] != "nan")].copy()
+
+    acct_arr_map: dict[str, float] = (
+        bob.drop_duplicates(subset=["_account_id_15"])
+           .set_index("_account_id_15")["_arr"]
+           .to_dict()
+    )
+    csa_to_accounts: dict[str, set[str]] = {}
+    for _, r in bob.iterrows():
+        csa_to_accounts.setdefault(r["_csa_name"].strip().lower(), set()).add(r["_account_id_15"])
+
+    # All CS employee name lookup (all roles)
+    all_cs = employees_df[employees_df["role"].isin(["cs", "cs_lead", "cs_director"])][["employee_id", "name"]].copy()
+    all_cs["_name_lower"]      = all_cs["name"].str.strip().str.lower()
+    all_cs["_last_name_lower"] = all_cs["_name_lower"].str.split().str[-1]
+    last_counts = all_cs["_last_name_lower"].value_counts()
+    last_name_to_id: dict[str, str] = {
+        r["_last_name_lower"]: r["employee_id"]
+        for _, r in all_cs.iterrows()
+        if last_counts[r["_last_name_lower"]] == 1
+    }
+    cs_names_lower: set[str] = set(all_cs["_name_lower"].tolist())
+
+    inp = _read_csv(input_path)
+    inp["_account_id_15"]   = inp["Account Id Casesafe"].astype(str).str.strip().str[:15]
+    inp["_type"]            = inp["Type"].astype(str).str.strip()
+    inp["_stage"]           = inp["Stage"].astype(str).str.strip()
+    inp["_close_date"]      = pd.to_datetime(inp["Close Date"], format="%d/%m/%Y", errors="coerce")
+    inp["_contract_start"]  = pd.to_datetime(inp.get("Contract Start Date", pd.Series(dtype=str)), format="%d/%m/%Y", errors="coerce")
+    inp["_contract_end"]    = pd.to_datetime(inp.get("Contract End Date",   pd.Series(dtype=str)), format="%d/%m/%Y", errors="coerce")
+    inp["_flat_acv"]        = pd.to_numeric(inp.get("Flat Renewal ACV (converted)", pd.Series(dtype=str)), errors="coerce").fillna(0)
+    inp["_tcv"]             = pd.to_numeric(inp.get("Recurring TCV (converted)",    pd.Series(dtype=str)), errors="coerce").fillna(0)
+    inp["_opp_name"]        = inp["Opportunity Name"].astype(str).str.strip()
+    inp["_opp_owner_lower"] = inp["Opportunity Owner"].astype(str).str.strip().str.lower()
+
+    renewals = (
+        inp[
+            (inp["_type"] == "Renewal") &
+            (inp["_stage"] != "Closed Lost") &
+            inp["_close_date"].notna() &
+            inp["_contract_start"].notna() &
+            inp["_contract_end"].notna() &
+            inp["_opp_owner_lower"].isin(cs_names_lower)
+        ]
+        .drop_duplicates(subset=["Opportunity Id Casesafe"])
+        .copy()
+    )
+    if renewals.empty:
+        return empty
+
+    renewals["_duration_years"] = (
+        (renewals["_contract_end"] - renewals["_contract_start"]).dt.days / 365.25
+    )
+    renewals["_month"] = renewals["_close_date"].dt.to_period("M").dt.to_timestamp()
+
+    # Pool ALL CS accounts from BoB
+    all_cs_ids: set[str] = set(all_cs["employee_id"].tolist())
+    all_acct_ids: set[str] = set()
+    for csa_lower, acct_set in csa_to_accounts.items():
+        if csa_lower in cs_names_lower:
+            all_acct_ids.update(acct_set)
+        elif csa_lower:
+            last = csa_lower.split()[-1]
+            if last_name_to_id.get(last) in all_cs_ids:
+                all_acct_ids.update(acct_set)
+
+    if not all_acct_ids:
+        return empty
+
+    all_renewals = renewals[
+        (renewals["_account_id_15"].isin(all_acct_ids)) &
+        (renewals["_duration_years"] > 1.0)
+    ].copy()
+
+    rows: list[dict] = []
+
+    for _, director in directors.iterrows():
+        director_id = director["employee_id"]
+
+        for _, r in all_renewals.iterrows():
+            flat_acv = float(r["_flat_acv"])
+            tcv      = float(r["_tcv"])
+            years    = float(r["_duration_years"])
+
+            if tcv > flat_acv > 0:
+                multi_year_acv = tcv - flat_acv
+            elif flat_acv > 0:
+                multi_year_acv = flat_acv * (years - 1)
+            elif acct_arr_map.get(r["_account_id_15"], 0) > 0:
+                multi_year_acv = acct_arr_map[r["_account_id_15"]] * (years - 1)
+            else:
+                continue
+
+            if multi_year_acv <= 0:
+                continue
+
+            rows.append({
+                "employee_id":      director_id,
+                "month":            r["_month"],
+                "opportunity_id":   str(r["Opportunity Id Casesafe"]),
+                "opportunity_name": r["_opp_name"],
+                "acv_eur":          round(multi_year_acv, 2),
+                "contract_years":   round(years, 2),
+            })
+            print(
+                f"[MultiYr Director] {director['name']}: {r['_opp_name'][:40]} "
                 f"{years:.1f}yr  multi_yr_acv_eur={multi_year_acv:,.0f}"
             )
 

@@ -5,11 +5,12 @@ from src.commission_plans.ae import AECommissionPlan
 from src.commission_plans.sdr_lead import SDRLeadCommissionPlan
 
 PLAN_REGISTRY = {
-    "sdr":      SDRCommissionPlan,
-    "cs":       CSACommissionPlan,
-    "cs_lead":  CSLeadCommissionPlan,
-    "ae":       AECommissionPlan,
-    "sdr_lead": SDRLeadCommissionPlan,
+    "sdr":         SDRCommissionPlan,
+    "cs":          CSACommissionPlan,
+    "cs_lead":     CSLeadCommissionPlan,
+    "cs_director": CSLeadCommissionPlan,  # Same plan; pipeline aggregates all CSAs
+    "ae":          AECommissionPlan,
+    "sdr_lead":    SDRLeadCommissionPlan,
     # Future roles:
     # "am": AMCommissionPlan,
     # "se": SECommissionPlan,

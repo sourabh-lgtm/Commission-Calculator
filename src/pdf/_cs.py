@@ -41,7 +41,7 @@ def _cs_summary_page(employee, period_label, summary, currency):
         except Exception:
             return "\u2014"
 
-    is_lead          = employee.get("role") == "cs_lead"
+    is_lead          = employee.get("role") in ("cs_lead", "cs_director")
     bonus_pct_label  = "20%" if is_lead else "15%"
     nrr_label        = "Team NRR (50% weight)" if is_lead else "NRR (50% weight)"
     csat_label       = "Team CSAT (35% weight)" if is_lead else "CSAT (35% weight)"

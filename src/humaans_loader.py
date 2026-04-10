@@ -36,6 +36,12 @@ _TITLE_RULES: list[tuple[str, str]] = [
     ("senior account manager", "am"),
     ("account manager",        "am"),
 
+    # CS Director (check before team lead and generic catch-all)
+    ("climate strategy director",          "cs_director"),
+    ("director of climate strategy",       "cs_director"),
+    ("head of climate strategy",           "cs_director"),
+    ("climate strategy manager",           "cs_director"),  # Riad Wakim (UK46)
+
     # CS Team Lead (check before generic "climate strategy" catch-all)
     ("climate strategy team lead",         "cs_lead"),
 
@@ -83,6 +89,16 @@ def _determine_role(title) -> str:
         if keyword in t:
             return role
     return "other"
+
+
+# Roles that have a registered commission plan (mirrors PLAN_REGISTRY keys).
+_COMMISSIONED_ROLES: set[str] = {"sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae"}
+
+# When a commissioned employee transitions to a new commissioned role part-way
+# through Q1 of the fiscal year, we split them into two plan periods so Q1
+# commission is paid under the old role and Q2+ under the new role.
+_FY26_Q1_END   = pd.Timestamp("2026-03-31")
+_FY26_Q2_START = pd.Timestamp("2026-04-01")
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +242,11 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 
     for emp_id, grp in grouped:
         # --- Current role: row with latest role_eff_date ---
+        # na_position='first' pushes NaT rows before dated rows so iloc[-1]
+        # always picks the latest dated row; if all dates are NaT the last
+        # row in the export (most recent state) is used instead of the first.
         latest_role_row = (
-            grp.sort_values("role_eff_date", ascending=False).iloc[0]
+            grp.sort_values("role_eff_date", ascending=True, na_position="first").iloc[-1]
         )
         title        = latest_role_row["title"]
         role         = _determine_role(title)
@@ -270,6 +289,48 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         else:
             plan_end = pd.Timestamp("2026-12-31")   # FY26
 
+        # -----------------------------------------------------------------------
+        # FY26 Q1 role-transition split
+        # If this employee moved from one commissioned role to another during
+        # Q1 2026 (Jan–Mar), create two plan entries so the old role earns Q1
+        # commission and the new role earns Q2+ commission.
+        # -----------------------------------------------------------------------
+        prev_commission_entry = None
+        if (
+            role in _COMMISSIONED_ROLES
+            and pd.notna(latest_role_row["role_eff_date"])
+            and pd.Timestamp("2026-01-01") <= latest_role_row["role_eff_date"] < _FY26_Q2_START
+        ):
+            sorted_dated = grp.dropna(subset=["role_eff_date"]).sort_values("role_eff_date")
+            earlier = sorted_dated[sorted_dated["role_eff_date"] < latest_role_row["role_eff_date"]]
+            if not earlier.empty:
+                prev_row   = earlier.iloc[-1]
+                prev_role  = _determine_role(prev_row["title"])
+                if prev_role in _COMMISSIONED_ROLES and prev_role != role:
+                    prev_same = grp[grp["title"].apply(_determine_role) == prev_role]
+                    prev_start = prev_same["role_eff_date"].min() if not prev_same.empty else prev_row["role_eff_date"]
+                    if pd.isna(prev_start):
+                        prev_start = emp_start
+                    prev_mgr = email_to_id.get(str(prev_row.get("manager_email", "")).strip().lower(), "")
+                    prev_commission_entry = {
+                        "employee_id":      str(emp_id),
+                        "name":             name,
+                        "title":            str(prev_row["title"]),
+                        "role":             prev_role,
+                        "department":       department,
+                        "cost_center_code": cost_center_code,
+                        "region":           region,
+                        "country":          country,
+                        "currency":         currency,
+                        "manager_id":       prev_mgr,
+                        "email":            email,
+                        "plan_start_date":  prev_start,
+                        "plan_end_date":    _FY26_Q1_END,
+                        "employment_start": emp_start,
+                    }
+                    # Snap current role to Q2 so the two periods don't overlap
+                    plan_start = _FY26_Q2_START
+
         employees_rows.append({
             "employee_id":       str(emp_id),
             "name":              name,
@@ -286,6 +347,9 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             "plan_end_date":     plan_end,
             "employment_start":  emp_start,
         })
+
+        if prev_commission_entry is not None:
+            employees_rows.append(prev_commission_entry)
 
         # --- Salary history: one record per unique salary_eff_date ---
         sal_rows = (

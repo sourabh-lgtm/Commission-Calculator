@@ -9,16 +9,17 @@ SHARED_JS = """
 // ============================================================
 // State
 // ============================================================
-let months = [], employees = [], activeTab = '', charts = {};
+let months = [], employees = [], orgNodes = [], activeTab = '', charts = {};
 let dvData = [], dvHeaders = [];
 
 // ============================================================
 // Init
 // ============================================================
 async function init() {
-  const [mRes, eRes] = await Promise.all([fetch('/api/months'), fetch('/api/employees')]);
+  const [mRes, eRes, oRes] = await Promise.all([fetch('/api/months'), fetch('/api/employees'), fetch('/api/org_chart')]);
   months = await mRes.json();
   employees = await eRes.json();
+  orgNodes = await oRes.json();
 
   // Populate global month selector
   const gmEl = document.getElementById('global-month');
@@ -58,7 +59,31 @@ function globalRole() {
 
 function filterByRole(arr) {
   const role = globalRole();
-  return role ? arr.filter(e => e.role === role) : arr;
+  if (!role) return arr;
+  // sdr_lead is shown alongside sdrs in all team and individual views
+  const group = role === 'sdr' ? ['sdr', 'sdr_lead'] : [role];
+  return arr.filter(e => group.includes(e.role));
+}
+
+// ============================================================
+// Org chart helpers
+// ============================================================
+
+// Returns a Set of all employee_ids that report (directly or transitively)
+// to managerId, based on the full orgNodes list from /api/org_chart.
+function getDescendants(managerId) {
+  const result = new Set();
+  const queue = [managerId];
+  while (queue.length) {
+    const id = queue.shift();
+    orgNodes.forEach(n => {
+      if ((n.manager_id || '') === id && !result.has(n.employee_id)) {
+        result.add(n.employee_id);
+        queue.push(n.employee_id);
+      }
+    });
+  }
+  return result;
 }
 
 function rebuildEmpDropdowns() {

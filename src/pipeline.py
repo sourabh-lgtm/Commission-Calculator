@@ -288,7 +288,7 @@ def _load_csat_sent(data_dir: str, employees_df: pd.DataFrame | None) -> pd.Data
         print("[Pipeline] CS: no employees_df for CSAT report name matching.")
         return pd.DataFrame(columns=["employee_id", "year", "quarter", "csats_sent"])
 
-    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
+    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead", "cs_director"])][["employee_id", "name"]].copy()
     cs_emps["_lower"]     = cs_emps["name"].str.strip().str.lower()
     cs_emps["_last"]      = cs_emps["_lower"].str.split().str[-1]
 
@@ -386,7 +386,7 @@ def _load_csat_scores(data_dir: str, employees_df: pd.DataFrame | None) -> pd.Da
         print("[Pipeline] CS: no employees_df for CSAT scores name matching.")
         return pd.DataFrame(columns=["employee_id", "date", "score"])
 
-    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
+    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead", "cs_director"])][["employee_id", "name"]].copy()
     cs_emps["_lower"] = cs_emps["name"].str.strip().str.lower()
     cs_emps["_last"]  = cs_emps["_lower"].str.split().str[-1]
 
@@ -535,7 +535,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
         print("[Pipeline] CS: no employees_df for credits name matching.")
         return pd.DataFrame(columns=["employee_id", "year", "quarter", "credits_used_pct"])
 
-    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
+    cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead", "cs_director"])][["employee_id", "name"]].copy()
     cs_emps["_lower"] = cs_emps["name"].str.strip().str.lower()
     cs_emps["_last"]  = cs_emps["_lower"].str.split().str[-1]
 
@@ -637,7 +637,10 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
             df["employee_id"] = df["employee_id"].astype(str).str.strip()
         return df
 
-    from src.cs_nrr_loader import compute_cs_nrr, compute_cs_lead_nrr, compute_cs_lead_multi_year_acv
+    from src.cs_nrr_loader import (
+        compute_cs_nrr, compute_cs_lead_nrr, compute_cs_lead_multi_year_acv,
+        compute_cs_director_nrr, compute_cs_director_multi_year_acv,
+    )
     employees_safe = employees_df if employees_df is not None else pd.DataFrame()
 
     # ---- NRR: individual CSAs ----
@@ -656,6 +659,22 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
     print("[Pipeline] CS: computing multi-year ACV for team leads...")
     cs_lead_multi_year_acv = compute_cs_lead_multi_year_acv(data_dir, employees_safe)
 
+    # ---- NRR: director aggregate (all CSAs) ----
+    print("[Pipeline] CS: computing director aggregate NRR...")
+    director_nrr, director_nrr_bkd = compute_cs_director_nrr(data_dir, employees_safe)
+    if not director_nrr.empty:
+        nrr = pd.concat([nrr, director_nrr], ignore_index=True)
+    if not director_nrr_bkd.empty:
+        nrr_breakdown = pd.concat([nrr_breakdown, director_nrr_bkd], ignore_index=True)
+
+    # ---- Multi-year ACV for director (all CS accounts) ----
+    print("[Pipeline] CS: computing multi-year ACV for director...")
+    director_multi_year_acv = compute_cs_director_multi_year_acv(data_dir, employees_safe)
+    if not director_multi_year_acv.empty:
+        cs_lead_multi_year_acv = pd.concat(
+            [cs_lead_multi_year_acv, director_multi_year_acv], ignore_index=True
+        )
+
     # ---- CSAT and credits (include cs_lead employees in name matching) ----
     csat_sent   = _load_csat_sent(data_dir, employees_safe)
     csat_scores = _load_csat_scores(data_dir, employees_safe)
@@ -669,17 +688,74 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
     if not referrals.empty:
         referrals["month"] = referrals["date"].dt.to_period("M").dt.to_timestamp()
 
-    # ---- Team-lead aggregate CSAT + Credits ----
+    # ---- Team-lead + director aggregate CSAT + Credits ----
     if not employees_safe.empty:
-        cs_leads = employees_safe[employees_safe["role"] == "cs_lead"]
+        cs_leads     = employees_safe[employees_safe["role"] == "cs_lead"]
+        cs_directors = employees_safe[employees_safe["role"] == "cs_director"]
 
-        # Drop individual credits rows for cs_leads — they'll be replaced by
-        # team-aggregate rows below (which correctly sum lead's own accounts +
-        # all team members' accounts). Without this, the plan's .iloc[0] lookup
-        # would hit the individual row rather than the team aggregate.
-        if not credits.empty and not cs_leads.empty:
-            lead_ids = set(cs_leads["employee_id"].astype(str))
-            credits  = credits[~credits["employee_id"].astype(str).isin(lead_ids)].copy()
+        # Drop individual credits rows for cs_leads and cs_directors — they'll be
+        # replaced by team-aggregate rows below.
+        if not credits.empty:
+            agg_ids = set()
+            if not cs_leads.empty:
+                agg_ids.update(cs_leads["employee_id"].astype(str))
+            if not cs_directors.empty:
+                agg_ids.update(cs_directors["employee_id"].astype(str))
+            if agg_ids:
+                credits = credits[~credits["employee_id"].astype(str).isin(agg_ids)].copy()
+
+        # Director aggregation runs FIRST (before leads loop) to use only raw
+        # individual-employee data and avoid double-counting lead aggregate rows.
+        for _, director in cs_directors.iterrows():
+            director_id  = director["employee_id"]
+            # All individual CS employees (cs + cs_lead) plus the director
+            all_cs_ids   = list(employees_safe[
+                employees_safe["role"].isin(["cs", "cs_lead"])
+            ]["employee_id"]) + [director_id]
+
+            # CSAT sent: sum across all CS members
+            if not csat_sent.empty:
+                dir_sent = csat_sent[csat_sent["employee_id"].isin(all_cs_ids)]
+                if not dir_sent.empty:
+                    agg_sent = (
+                        dir_sent.groupby(["year", "quarter"])["csats_sent"]
+                        .sum().reset_index()
+                    )
+                    agg_sent["employee_id"] = director_id
+                    csat_sent = pd.concat([csat_sent, agg_sent], ignore_index=True)
+
+            # CSAT scores: pool all CS member scores under director's employee_id
+            if not csat_scores.empty:
+                dir_scr = csat_scores[csat_scores["employee_id"].isin(all_cs_ids)].copy()
+                if not dir_scr.empty:
+                    dir_scr["employee_id"] = director_id
+                    csat_scores = pd.concat([csat_scores, dir_scr], ignore_index=True)
+
+            # Credits: re-aggregate raw allocated/used across all CS members
+            if not credits_raw.empty:
+                dir_cr = credits_raw[credits_raw["employee_id"].isin(all_cs_ids)]
+                if not dir_cr.empty:
+                    agg_cr = (
+                        dir_cr.groupby(["year", "quarter"])
+                        .agg(total_allocated=("total_allocated", "sum"),
+                             total_used=("total_used", "sum"))
+                        .reset_index()
+                    )
+                    agg_cr["employee_id"] = director_id
+                    agg_cr["credits_used_pct"] = agg_cr.apply(
+                        lambda r: 100.0 if r["total_allocated"] == 0
+                        else round(r["total_used"] / r["total_allocated"] * 100, 4),
+                        axis=1,
+                    )
+                    dir_credits = agg_cr[["employee_id", "year", "quarter", "credits_used_pct"]]
+                    credits = pd.concat([credits, dir_credits], ignore_index=True)
+
+            # Credits detail: tag all CS members' detail rows with director_id
+            if not credits_detail.empty:
+                dir_cr_detail = credits_detail[credits_detail["employee_id"].isin(all_cs_ids)].copy()
+                if not dir_cr_detail.empty:
+                    dir_cr_detail["employee_id"] = director_id
+                    credits_detail = pd.concat([credits_detail, dir_cr_detail], ignore_index=True)
 
         for _, lead in cs_leads.iterrows():
             lead_id    = lead["employee_id"]
