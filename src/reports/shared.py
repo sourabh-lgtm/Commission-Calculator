@@ -143,9 +143,14 @@ def payroll_summary(model, year: int) -> dict:
 
     def _q(m): return (m.month - 1) // 3 + 1
 
-    commissioned = model.employees[
-        model.employees["role"].isin(["sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae"])
-    ].copy()
+    commissioned = (
+        model.employees[
+            model.employees["role"].isin(["sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae"])
+        ]
+        .sort_values("plan_end_date", ascending=True, na_position="last")
+        .drop_duplicates(subset=["employee_id"], keep="last")
+        .copy()
+    )
     regions: dict[str, list] = {}
 
     for _, emp in commissioned.iterrows():
