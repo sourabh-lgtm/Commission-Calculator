@@ -44,6 +44,21 @@ ACCELERATOR_1_RATE  = 0.12   # 12% on ACV 100-150% of annual target
 ACCELERATOR_2_RATE  = 0.15   # 15% on ACV above 150% of annual target
 QUARTERLY_GATE      = 0.50   # 50% of quarterly target required to earn commission
 
+# ---------------------------------------------------------------------------
+# Ramp plan criteria & payout (evaluated from ae_ramp_report.csv)
+# Per the commission plan contract, 5 criteria must ALL be met:
+#   1. Pipeline Value ≥ €200k
+#   2. Pipeline Customer Count ≥ 7 at Solutions Design stage or above
+#   3. Multi-Threading: Count of opps with 2+ contacts ≥ Count of opps Solution Design+
+#   4. Pipeline Stage: Solutions Design and Above (gate for criteria 2 & 3)
+#   5. SAO Generation: ≥50% self-generated pipeline
+# Payout: 50% of Commission = 50% × (quarterly_target × BASE_RATE)
+# ---------------------------------------------------------------------------
+RAMP_PIPELINE_GOAL    = 200_000  # EUR — minimum total pipeline value
+RAMP_SELF_GEN_GOAL    = 0.50     # 50% — minimum self-generated (SAO generation)
+RAMP_SOLUTION_DESIGN  = 7        # minimum customers at Solutions Design stage or above
+RAMP_PAYOUT_PCT       = 0.50     # 50% of quarterly OTE commission if all criteria met
+
 
 class AECommissionPlan(BaseCommissionPlan):
     role = "ae"
@@ -163,6 +178,8 @@ class AECommissionPlan(BaseCommissionPlan):
             "multi_year_commission":     0.0,
             "accelerator_1":             0.0,
             "accelerator_2":             0.0,
+            "ramp_passed":               None,
+            "ramp_bonus":                0.0,
             "accelerator_topup":         0.0,
         }
 
@@ -245,6 +262,37 @@ class AECommissionPlan(BaseCommissionPlan):
         qualifying_acv_fy = q_acv_fy if gate_met else 0.0
         qualifying_acv_my = q_acv_my if gate_met else 0.0
 
+        # --- Ramp plan evaluation (Q1 only for ramp AEs) ---
+        # Criteria from ae_ramp_report.csv: pipeline ≥ 200k, self-gen ≥ 50%, solution design ≥ 7
+        # Payout: 50% of quarterly target (added on top of any ACV commission)
+        ramp_passed = None
+        ramp_bonus  = 0.0
+        if is_ramp_q1 and quarter == 1:
+            ramp_df  = cs_performance.get("ae_ramp_report", pd.DataFrame()) if cs_performance else pd.DataFrame()
+            q_label  = f"Q{quarter}_{year}"
+            if not ramp_df.empty:
+                ramp_row = ramp_df[
+                    (ramp_df["employee_id"].astype(str) == str(emp_id)) &
+                    (ramp_df["quarter"] == q_label)
+                ]
+                if not ramp_row.empty:
+                    r = ramp_row.iloc[0]
+                    notes = str(r.get("notes", "") or "").strip().lower()
+                    if "did not have ramp goals" in notes:
+                        ramp_passed = None  # explicitly not on ramp plan
+                    else:
+                        sol_design = float(r.get("Count of opps Solution Design+", 0) or 0)
+                        multi_thread = float(r.get("Count of opps with 2+ contacts", 0) or 0)
+                        pipeline_ok   = float(r.get("Total Pipeline Value", 0) or 0) >= RAMP_PIPELINE_GOAL
+                        self_gen_ok   = float(r.get("% of pipe self-gen", 0) or 0) >= RAMP_SELF_GEN_GOAL
+                        sol_design_ok = sol_design >= RAMP_SOLUTION_DESIGN
+                        # Multi-threading: at least as many multi-threaded opps as solution design opps
+                        multi_thread_ok = multi_thread >= sol_design
+                        ramp_passed = pipeline_ok and self_gen_ok and sol_design_ok and multi_thread_ok
+                        if ramp_passed:
+                            # 50% of Commission = 50% × quarterly OTE commission (target × base rate)
+                            ramp_bonus = round(q_target_eur * BASE_RATE * RAMP_PAYOUT_PCT * fx_rate, 2)
+
         # --- Base commission for this quarter ---
         base_comm = round(qualifying_acv_fy * BASE_RATE * fx_rate, 2)
         my_comm   = round(qualifying_acv_my * MULTI_YEAR_RATE * fx_rate, 2)
@@ -293,7 +341,7 @@ class AECommissionPlan(BaseCommissionPlan):
                 tier2_acv = annual_acv_fy - tier1_end
                 accel_2 = round(tier2_acv * ACCELERATOR_2_RATE * fx_rate, 2)
 
-        total_topup = round(base_comm + my_comm + accel_1 + accel_2, 2)
+        total_topup = round(base_comm + my_comm + accel_1 + accel_2 + ramp_bonus, 2)
 
         if total_topup == 0:
             return _zero
@@ -321,6 +369,9 @@ class AECommissionPlan(BaseCommissionPlan):
             "multi_year_commission":     my_comm,
             "accelerator_1":             accel_1,
             "accelerator_2":             accel_2,
+            # Ramp plan (Q1 only for ramp AEs)
+            "ramp_passed":               ramp_passed,
+            "ramp_bonus":                ramp_bonus,
             "accelerator_topup":         total_topup,
             # Gate summary (all 4 quarters at final_quarter; just this quarter otherwise)
             "q_gate_results":            q_gate_results,

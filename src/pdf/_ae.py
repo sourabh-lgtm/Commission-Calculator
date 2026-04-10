@@ -73,6 +73,8 @@ def _ae_summary_page(employee, period_label, summary, accelerator, currency):
     accelerator_2            = float(acc.get("accelerator_2", 0) or 0)
     total_commission         = float(acc.get("accelerator_topup", summary.get("accelerator_topup", summary.get("total_commission", 0))) or 0)
     q_gate_results           = acc.get("q_gate_results", {})
+    ramp_passed              = acc.get("ramp_passed")          # True / False / None
+    ramp_bonus               = float(acc.get("ramp_bonus", 0) or 0)
 
     rows: list[list] = [["Component", "Amount (EUR)", f"Amount ({currency})"]]
     fx = float(acc.get("fx_rate", summary.get("fx_rate", 1)) or 1)
@@ -87,6 +89,17 @@ def _ae_summary_page(employee, period_label, summary, accelerator, currency):
         if gate is not None:
             gate_str = "\u2713 Met" if gate else "\u2717 Not Met"
             rows.append([f"Q{q} Gate (\u2265 50% of quarterly target)", gate_str, ""])
+
+    # Ramp period section (Q1 only, for employees on ramp plan)
+    if ramp_passed is not None:
+        ramp_criteria_str = "\u2713 All criteria met" if ramp_passed else "\u2717 Criteria not met"
+        rows.append(["Q1 Ramp Period (01/01/2026\u201331/03/2026)", ramp_criteria_str, ""])
+        if ramp_bonus > 0:
+            rows.append([
+                "  Q1 Ramp Bonus (50% of quarterly OTE: pipeline \u2265\u20ac200k, 7+ sol.design opps, \u226550% self-gen)",
+                _fmt_eur(ramp_bonus / fx if fx else 0),
+                _fmt(ramp_bonus),
+            ])
 
     rows.append(["Qualifying ACV (gate-passed quarters)", _fmt_eur(qualifying_acv_eur), "\u2014"])
     rows.append(["Base Commission (10%)", _fmt_eur(base_commission / fx if fx else 0), _fmt(base_commission)])

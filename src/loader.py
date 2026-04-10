@@ -280,6 +280,7 @@ def load_all(data_dir: str) -> dict:
     # Load AE and SDR Lead targets
     ae_targets       = _load_optional_csv(data_dir, "ae_targets.csv")
     sdr_lead_targets = _load_optional_csv(data_dir, "sdr_lead_targets.csv")
+    ae_ramp_report   = _load_optional_csv(data_dir, "ae_ramp_report.csv")
 
     return {
         "employees":        employees,
@@ -289,6 +290,7 @@ def load_all(data_dir: str) -> dict:
         "ae_closed_won":    ae_cw,
         "ae_targets":       ae_targets,
         "sdr_lead_targets": sdr_lead_targets,
+        "ae_ramp_report":   ae_ramp_report,
         "fx_rates":         fx_rates,
     }
 

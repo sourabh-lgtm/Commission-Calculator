@@ -1,0 +1,4 @@
+employee_id,quarter,Rep,Total Pipeline Value,% of pipe self-gen,Value of self-gen pipeline,Count of opps,Count of opps Solution Design+,Count of opps with 2+ contacts,Q2 pipeline,Q3 pipeline,notes
+UK63,Q1_2026,Harry,696805,0.73,476033,17,7,12,72229,389951,
+UK18,Q1_2026,Felix,431436,0.37,101298,13,2,7,61298,284216,
+UK54,Q1_2026,Joe,24000,0.25,0,12,1,3,24000,0,Joe did not have ramp goals in Q1

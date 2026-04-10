@@ -300,7 +300,7 @@ async function loadAEDetail() {
     '</div>';
 
   // Quarterly table
-  const heads = ['Quarter', 'Q ACV (EUR)', 'Q Target (EUR)', 'Attainment', 'Gate Met', 'Total Deals', 'Invoiced', 'Forecast'];
+  const heads = ['Quarter', 'Q ACV (EUR)', 'Q Target (EUR)', 'Attainment', 'Gate Met', 'Ramp Status', 'Total Deals', 'Invoiced', 'Forecast'];
   const rows = (quarters || []).map(q => {
     const gateStr = q.gate_met
       ? '<span style="color:var(--green);font-weight:700">\u2713 Met</span>'
@@ -308,12 +308,21 @@ async function loadAEDetail() {
     const attColor2 = q.q_attainment_pct >= 100
       ? 'var(--green)' : q.q_attainment_pct >= 50
       ? 'var(--orange)' : 'var(--red)';
+    // Look up ramp result from the accelerator list for this quarter
+    const qAcc = accList.find(a => a.quarter === q.quarter);
+    let rampCell = '<span style="color:var(--dim)">\u2014</span>';
+    if (qAcc && qAcc.ramp_passed === true) {
+      rampCell = '<span style="color:var(--green);font-weight:700">\u2713 Ramp Earned</span>';
+    } else if (qAcc && qAcc.ramp_passed === false) {
+      rampCell = '<span style="color:var(--red);font-weight:700">\u2717 Not Met</span>';
+    }
     return [
       q.q_label,
       '\u20ac' + fmtNum(q.q_acv_eur),
       '\u20ac' + fmtNum(q.q_target_eur),
       '<span style="color:' + attColor2 + ';font-weight:600">' + q.q_attainment_pct + '%</span>',
       gateStr,
+      rampCell,
       q.deals_count,
       q.invoiced_count,
       q.forecast_count,
@@ -325,7 +334,7 @@ async function loadAEDetail() {
   const commPanel = document.getElementById('ae-det-commission');
   if (accList.length > 0) {
     const sym = cur === 'GBP' ? '\u00a3' : cur === 'SEK' ? 'kr' : '\u20ac';
-    const bHeads = ['Quarter', 'Gate', 'Qualifying ACV (EUR)', 'Base Comm (10%)', 'Multi-yr Comm (1%)', 'Accel Tier1 (12%)', 'Accel Tier2 (15%)', 'Total Payout (' + cur + ')'];
+    const bHeads = ['Quarter', 'Gate', 'Ramp', 'Qualifying ACV (EUR)', 'Base Comm (10%)', 'Multi-yr Comm (1%)', 'Ramp Bonus (50% OTE)', 'Accel Tier1 (12%)', 'Accel Tier2 (15%)', 'Total Payout (' + cur + ')'];
     const bRows = accList.map(a => {
       const fx   = a.fx_rate || 1;
       const fmtL = v => (v && v > 0) ? sym + fmtNum(v) : '\u2014';
@@ -334,11 +343,18 @@ async function loadAEDetail() {
       const gateStr = a.gate_met
         ? '<span style="color:var(--green);font-weight:700">\u2713</span>'
         : '<span style="color:var(--red);font-weight:700">\u2717</span>';
+      let rampStr = '<span style="color:var(--dim)">\u2014</span>';
+      if (a.ramp_passed === true) {
+        rampStr = '<span style="color:var(--green);font-weight:700">\u2713 Earned</span>';
+      } else if (a.ramp_passed === false) {
+        rampStr = '<span style="color:var(--red);font-weight:700">\u2717 Not met</span>';
+      }
       return [
-        qLbl, gateStr,
+        qLbl, gateStr, rampStr,
         fmtE(a.qualifying_acv_eur),
         fmtL(a.base_commission),
         fmtL(a.multi_year_commission),
+        fmtL(a.ramp_bonus),
         fmtL(a.accelerator_1),
         fmtL(a.accelerator_2),
         '<strong>' + fmtL(a.accelerator_topup) + '</strong>',
@@ -346,8 +362,7 @@ async function loadAEDetail() {
     });
     // Grand total row
     const totalTopup = accList.reduce((s,a) => s + (a.accelerator_topup||0), 0);
-    const fxLast = (accList[accList.length-1]||{}).fx_rate || 1;
-    bRows.push(['<strong>Total</strong>', '', '', '', '', '', '',
+    bRows.push(['<strong>Total</strong>', '', '', '', '', '', '', '', '',
       '<strong>' + sym + fmtNum(totalTopup) + '</strong>']);
     renderTable('ae-det-comm-table', bHeads, bRows);
     commPanel.style.display = '';

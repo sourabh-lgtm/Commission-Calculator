@@ -48,6 +48,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.cs_performance["ae_targets"]       = data.get("ae_targets", pd.DataFrame())
     model.cs_performance["sdr_closed_won"]   = model.closed_won
     model.cs_performance["sdr_lead_targets"] = data.get("sdr_lead_targets", pd.DataFrame())
+    model.cs_performance["ae_ramp_report"]   = data.get("ae_ramp_report", pd.DataFrame())
     model.cs_performance["fx_rates"]         = model.fx_rates
 
     # ------------------------------------------------------------------
