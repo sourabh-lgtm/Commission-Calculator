@@ -42,6 +42,8 @@ import re
 
 import pandas as pd
 
+from src.helpers import quarter_end_month
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -571,8 +573,9 @@ def build_ae_closed_won_commission(
     # ------------------------------------------------------------------
     # 2. Calculate 1st-year and total ACV per opportunity
     # ------------------------------------------------------------------
-    first_year_acv: dict[str, float] = {}
-    total_acv:      dict[str, float] = {}
+    first_year_acv:  dict[str, float] = {}
+    total_acv:       dict[str, float] = {}
+    contract_starts: dict[str, pd.Timestamp] = {}
 
     for opp_id, grp in raw.groupby("Opportunity Id Casesafe"):
         key = str(opp_id).strip()
@@ -580,6 +583,8 @@ def build_ae_closed_won_commission(
         tot = _calc_total_rr_acv(grp)
         first_year_acv[key] = fy
         total_acv[key]      = tot
+        rr_lines = grp[grp["Product Code"].astype(str).str.upper().str.startswith("RR")]
+        contract_starts[key] = rr_lines["line_start"].dropna().min() if not rr_lines.empty else pd.NaT
 
     # ------------------------------------------------------------------
     # 3. Build opportunity-level summary
@@ -615,6 +620,7 @@ def build_ae_closed_won_commission(
     opps["acv_eur"]           = opps["opportunity_id"].map(first_year_acv).fillna(0.0)
     opps["total_rr_acv_eur"]  = opps["opportunity_id"].map(total_acv).fillna(0.0)
     opps["multi_year_acv_eur"] = (opps["total_rr_acv_eur"] - opps["acv_eur"]).clip(lower=0.0)
+    opps["contract_start"]    = opps["opportunity_id"].map(contract_starts)
 
     # ------------------------------------------------------------------
     # 4. Match Opportunity Owner name → AE employee_id
@@ -758,8 +764,22 @@ def build_ae_closed_won_commission(
 
         acv_fy_per = round(acv_fy / n, 2)
 
+        # First forecast invoice is always booked at the quarter-end of the close month.
+        # Subsequent invoices are offset from max(close_date, contract_start).
+        close_month = close_dt.to_period("M").to_timestamp()
+        first_inv_month = quarter_end_month(close_month)
+        contract_start_raw = r.get("contract_start")
+        base_dt = (
+            max(close_dt, pd.Timestamp(contract_start_raw))
+            if pd.notna(contract_start_raw)
+            else close_dt
+        )
+
         for i in range(n):
-            inv_month = (close_dt + pd.DateOffset(months=months_between * i)).to_period("M").to_timestamp()
+            if i == 0:
+                inv_month = first_inv_month
+            else:
+                inv_month = (base_dt + pd.DateOffset(months=months_between * i)).to_period("M").to_timestamp()
             rows.append({
                 "employee_id":                    r["employee_id"],
                 "opportunity_id":                 r["opportunity_id"],
