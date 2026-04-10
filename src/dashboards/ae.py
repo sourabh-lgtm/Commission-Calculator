@@ -434,11 +434,6 @@ function gateIcon(met) {
     : '<span style="color:var(--red);font-weight:700">\u2717</span>';
 }
 
-function fmtNum(v) {
-  const n = parseFloat(v);
-  if (isNaN(n)) return '\u2014';
-  return n.toLocaleString('en-GB', {minimumFractionDigits: 0, maximumFractionDigits: 0});
-}
 """
 
 

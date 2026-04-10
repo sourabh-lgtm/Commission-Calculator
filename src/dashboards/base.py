@@ -796,6 +796,12 @@ function fmtMonth(s) {
   return d.toLocaleDateString('en-GB',{month:'short',year:'2-digit'}).replace(' ','\u00b7');
 }
 
+function fmtNum(v) {
+  const n = parseFloat(v);
+  if (isNaN(n)) return '\u2014';
+  return n.toLocaleString('en-GB', {minimumFractionDigits: 0, maximumFractionDigits: 0});
+}
+
 function fmtAmt(v, currency) {
   if (v === null || v === undefined) return '\u2014';
   const n = parseFloat(v);
