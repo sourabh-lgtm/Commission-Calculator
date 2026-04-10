@@ -306,7 +306,7 @@ async function loadWorkings() {
         tblHtml += '<td colspan="5" style="padding:7px 12px;font-weight:700;font-size:12px;color:#fff;letter-spacing:.3px">' + (r.opportunity_name || '') + '</td>';
         tblHtml += '</tr>';
       } else if (r.type === 'CS NRR BoB') {
-        const amt = r.commission != null ? sym + fmtNum(r.commission) : '\u2014';
+        const amt = r.commission != null ? '\u20ac' + fmtNum(r.commission) : '\u2014';
         tblHtml += '<tr style="background:#F9FAFB">';
         tblHtml += '<td style="padding:5px 12px;color:var(--dim)"></td>';
         tblHtml += '<td style="padding:5px 12px;font-size:10px;color:var(--dim)">Base BoB</td>';
@@ -315,7 +315,7 @@ async function loadWorkings() {
         tblHtml += '<td style="padding:5px 12px;text-align:right;font-weight:700">' + amt + '</td>';
         tblHtml += '</tr>';
       } else if (r.type === 'CS NRR Numerator') {
-        const amt = r.commission != null ? sym + fmtNum(r.commission) : '\u2014';
+        const amt = r.commission != null ? '\u20ac' + fmtNum(r.commission) : '\u2014';
         tblHtml += '<tr style="background:#F9FAFB;border-bottom:2px solid var(--border)">';
         tblHtml += '<td style="padding:5px 12px;color:var(--dim)"></td>';
         tblHtml += '<td style="padding:5px 12px;font-size:10px;color:var(--dim)">NRR Numerator</td>';
@@ -324,7 +324,7 @@ async function loadWorkings() {
         tblHtml += '<td style="padding:5px 12px;text-align:right;font-weight:700">' + amt + '</td>';
         tblHtml += '</tr>';
       } else if (r.type === 'CS NRR Account') {
-        const net = r.commission != null ? (r.commission >= 0 ? '+' : '') + fmtNum(r.commission) : '\u2014';
+        const net = r.commission != null ? (r.commission >= 0 ? '+\u20ac' : '-\u20ac') + fmtNum(Math.abs(r.commission)) : '\u2014';
         tblHtml += '<tr style="background:#F7F7F7">';
         tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px"></td>';
         tblHtml += '<td style="padding:4px 12px;color:var(--dim);font-size:10px;padding-left:20px">\u21b3</td>';
