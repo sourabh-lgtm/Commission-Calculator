@@ -150,9 +150,18 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/api/commission_workings":
-            emp_id = _p("employee_id", "")
-            month  = _parse_month(_p("month"))
-            self._respond(commission_workings(MODEL, emp_id, month))
+            emp_id  = _p("employee_id", "")
+            q_str   = _p("quarter", "")
+            yr_str  = _p("year", "")
+            if q_str and yr_str:
+                quarter = int(q_str)
+                year    = int(yr_str)
+                # quarter-end month for summary lookup
+                month   = pd.Timestamp(year=year, month=quarter * 3, day=1)
+                self._respond(commission_workings(MODEL, emp_id, month, quarter=quarter, year=year))
+            else:
+                month = _parse_month(_p("month"))
+                self._respond(commission_workings(MODEL, emp_id, month))
             return
 
         if path == "/api/spifs":

@@ -1,1 +1,44 @@
-{}
+{
+  "272_2026-03-01": {
+    "status": "pending",
+    "approved_at": null,
+    "sent_at": null,
+    "commission_total_at_approval": null
+  },
+  "UK89_2026-03-01": {
+    "status": "approved",
+    "approved_at": "2026-04-10T09:08:14.287613",
+    "sent_at": null,
+    "commission_total_at_approval": 100.0
+  },
+  "256_2026-03-01": {
+    "status": "approved",
+    "approved_at": "2026-04-10T09:08:20.315785",
+    "sent_at": null,
+    "commission_total_at_approval": 3900.0
+  },
+  "UK76_2026-03-01": {
+    "status": "approved",
+    "approved_at": "2026-04-10T09:08:21.343789",
+    "sent_at": null,
+    "commission_total_at_approval": 1679.64
+  },
+  "UK86_2026-03-01": {
+    "status": "approved",
+    "approved_at": "2026-04-10T09:08:22.256097",
+    "sent_at": null,
+    "commission_total_at_approval": 1877.32
+  },
+  "UK84_2026-03-01": {
+    "status": "approved",
+    "approved_at": "2026-04-10T09:08:22.953836",
+    "sent_at": null,
+    "commission_total_at_approval": 2208.76
+  },
+  "UK81_2026-03-01": {
+    "status": "pending",
+    "approved_at": null,
+    "sent_at": null,
+    "commission_total_at_approval": null
+  }
+}

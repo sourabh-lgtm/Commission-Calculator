@@ -127,8 +127,11 @@ def _ae_summary_page(employee, period_label, summary, accelerator, currency):
     elements.append(tbl)
     elements.append(Spacer(1, 6*mm))
 
+    q_month_names = {1: "March", 2: "June", 3: "September", 4: "December"}
+    final_q = int(acc.get("quarter", 4) or 4)
+    payroll_month = q_month_names.get(final_q, "December")
     elements.append(_para(
-        "Annual commission paid in December payroll.",
+        f"Commission paid in {payroll_month} payroll.",
         _style("ae_note", fontName="Helvetica", fontSize=10, textColor=DIM)
     ))
     elements.append(Spacer(1, 4*mm))

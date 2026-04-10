@@ -8,7 +8,13 @@ from src.commission_plans import get_plan
 # Commission workings: row-level audit trail
 # ---------------------------------------------------------------------------
 
-def commission_workings(model, employee_id: str, month: pd.Timestamp) -> dict:
+def commission_workings(
+    model,
+    employee_id: str,
+    month: pd.Timestamp,
+    quarter: int = None,
+    year: int = None,
+) -> dict:
     emp_row = model.employees[model.employees["employee_id"] == employee_id]
     if emp_row.empty:
         return {"rows": [], "summary": {}}
@@ -35,6 +41,8 @@ def commission_workings(model, employee_id: str, month: pd.Timestamp) -> dict:
             model.closed_won,
             model.fx_rates,
             cs_performance=cs_perf,
+            quarter=quarter,
+            year=year,
         )
     else:
         rows = plan.get_workings_rows(
@@ -67,13 +75,36 @@ def commission_workings(model, employee_id: str, month: pd.Timestamp) -> dict:
             })
 
     # Summary from commission_detail
-    det = model.commission_detail[
-        (model.commission_detail["employee_id"] == employee_id) &
-        (model.commission_detail["month"] == month)
-    ]
+    # For AE quarterly view: look up by quarter-end month
+    if emp["role"] == "ae" and quarter is not None and year is not None:
+        q_end_month = pd.Timestamp(year=year, month=quarter * 3, day=1)
+        det = model.commission_detail[
+            (model.commission_detail["employee_id"] == employee_id) &
+            (model.commission_detail["month"] == q_end_month)
+        ]
+    else:
+        det = model.commission_detail[
+            (model.commission_detail["employee_id"] == employee_id) &
+            (model.commission_detail["month"] == month)
+        ]
     summary = det.iloc[0].to_dict() if not det.empty else {}
     summary = {k: (v.strftime("%Y-%m-%d") if isinstance(v, pd.Timestamp) else v)
                for k, v in summary.items()}
+
+    # Also include the accelerator row for AE quarterly view
+    if emp["role"] == "ae" and quarter is not None and year is not None:
+        if not model.accelerators.empty:
+            acc_row = model.accelerators[
+                (model.accelerators["employee_id"] == employee_id) &
+                (model.accelerators["year"] == year) &
+                (model.accelerators["quarter"] == quarter)
+            ]
+            if not acc_row.empty:
+                acc = acc_row.iloc[0].to_dict()
+                summary["accelerator"] = {
+                    k: (v.strftime("%Y-%m-%d") if isinstance(v, pd.Timestamp) else v)
+                    for k, v in acc.items()
+                }
 
     return {"rows": rows, "summary": summary}
 
@@ -356,6 +387,12 @@ def employee_list(model) -> list[dict]:
     commissioned = model.employees[
         model.employees["role"].isin(["sdr", "cs", "cs_lead", "ae"])
     ].copy()
+    # AEs: only show those active on or after 2026-01-01 (exclude pre-FY26 leavers)
+    if "plan_end_date" in commissioned.columns:
+        fy26_start = pd.Timestamp("2026-01-01")
+        ae_mask = commissioned["role"] == "ae"
+        ae_active = commissioned["plan_end_date"].isna() | (commissioned["plan_end_date"] >= fy26_start)
+        commissioned = commissioned[~ae_mask | ae_active]
     cols = ["employee_id", "name", "title", "role", "region", "currency"]
     if "manager_id" in commissioned.columns:
         cols.append("manager_id")

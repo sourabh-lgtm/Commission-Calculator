@@ -40,45 +40,65 @@ def ae_overview(model, year: int) -> dict:
                 annual_target_eur = float(t["annual_target_eur"].iloc[0])
                 q_target_eur      = float(t["quarterly_target_eur"].iloc[0])
 
-        # Per-quarter ACV and gate
+        # Per-quarter ACV and gate (attributed by close_date, deduplicated by opportunity)
+        def _in_qm(d, qm):
+            if pd.isna(d):
+                return False
+            return pd.Timestamp(d).to_period("M").to_timestamp() in qm
+
         q_acv   = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
         q_gate  = {1: False, 2: False, 3: False, 4: False}
-        if not ae_cw.empty:
+        has_cw_data = (
+            not ae_cw.empty and
+            "close_date" in ae_cw.columns and
+            ("opportunity_acv_eur" in ae_cw.columns or "acv_eur" in ae_cw.columns)
+        )
+        if has_cw_data:
             emp_yr = ae_cw[ae_cw["employee_id"] == emp_id]
             for q in range(1, 5):
                 qm = _q_months(q)
-                qd = emp_yr[emp_yr["month"].isin(qm)]
-                acv = float(qd["acv_eur"].sum())
+                qd = emp_yr[emp_yr["close_date"].apply(lambda d: _in_qm(d, qm))]
+                qd_dedup = qd.drop_duplicates("opportunity_id")
+                if "opportunity_acv_eur" in qd_dedup.columns:
+                    acv = float(qd_dedup["opportunity_acv_eur"].sum())
+                else:
+                    acv = float(qd_dedup["acv_eur"].sum()) if "acv_eur" in qd_dedup.columns else 0.0
                 q_acv[q] = round(acv, 2)
                 q_gate[q] = acv >= q_target_eur * 0.5 if q_target_eur > 0 else False
 
         ytd_acv_eur = round(sum(q_acv.values()), 2)
         ytd_acv_my  = 0.0
-        if not ae_cw.empty:
-            emp_yr = ae_cw[
+        if has_cw_data:
+            # Multi-year ACV: unique deals whose close_date falls in the year
+            all_year_qm = [m for q in range(1, 5) for m in _q_months(q)]
+            emp_yr_all = ae_cw[
                 (ae_cw["employee_id"] == emp_id) &
-                (ae_cw["month"].isin(year_months))
-            ]
-            if "multi_year_acv_eur" in emp_yr.columns:
-                ytd_acv_my = round(float(emp_yr["multi_year_acv_eur"].sum()), 2)
+                ae_cw["close_date"].apply(lambda d: _in_qm(d, all_year_qm))
+            ].drop_duplicates("opportunity_id")
+            if "opportunity_multi_year_acv_eur" in emp_yr_all.columns:
+                ytd_acv_my = round(float(emp_yr_all["opportunity_multi_year_acv_eur"].sum()), 2)
+            elif "multi_year_acv_eur" in emp_yr_all.columns:
+                ytd_acv_my = round(float(emp_yr_all["multi_year_acv_eur"].sum()), 2)
 
         attainment_pct = round((ytd_acv_eur / annual_target_eur) * 100, 1) if annual_target_eur > 0 else 0.0
 
         qualifying_acv_eur = round(sum(q_acv[q] for q in range(1, 5) if q_gate[q]), 2)
 
-        # Year-end commission: pull from commission_detail for December of year
+        # Total commission: sum all quarterly payouts across the year
         year_end_commission     = 0.0
         year_end_commission_eur = 0.0
         if not model.commission_detail.empty:
-            dec_month = pd.Timestamp(year=year, month=12, day=1)
-            det = model.commission_detail[
+            emp_det = model.commission_detail[
                 (model.commission_detail["employee_id"] == emp_id) &
-                (model.commission_detail["month"] == dec_month)
+                (model.commission_detail["month"].isin(year_months)) &
+                (model.commission_detail["accelerator_topup"] > 0)
             ]
-            if not det.empty:
-                year_end_commission = round(float(det["accelerator_topup"].iloc[0]), 2)
-                fx = float(det["fx_rate"].iloc[0]) or 1.0
-                year_end_commission_eur = round(year_end_commission / fx, 2)
+            if not emp_det.empty:
+                year_end_commission = round(float(emp_det["accelerator_topup"].sum()), 2)
+                # EUR: divide each row's commission by its fx_rate then sum
+                year_end_commission_eur = round(
+                    float((emp_det["accelerator_topup"] / emp_det["fx_rate"].clip(lower=1e-9)).sum()), 2
+                )
 
         employees_out.append({
             "employee_id":           str(emp_id),
@@ -152,6 +172,17 @@ def ae_detail(model, employee_id: str, year: int) -> dict:
     _q_labels = {1: f"Q1 FY{str(year)[2:]}", 2: f"Q2 FY{str(year)[2:]}",
                  3: f"Q3 FY{str(year)[2:]}", 4: f"Q4 FY{str(year)[2:]}"}
 
+    def _in_qm_det(d, qm):
+        if pd.isna(d):
+            return False
+        return pd.Timestamp(d).to_period("M").to_timestamp() in qm
+
+    has_cw = (
+        not ae_cw.empty and
+        "close_date" in ae_cw.columns and
+        ("opportunity_acv_eur" in ae_cw.columns or "acv_eur" in ae_cw.columns)
+    )
+
     quarters_out = []
     for q in range(1, 5):
         qm = [m for m in year_months if (m.month - 1) // 3 + 1 == q]
@@ -159,13 +190,18 @@ def ae_detail(model, employee_id: str, year: int) -> dict:
         deals_count    = 0
         invoiced_count = 0
         forecast_count = 0
-        if not ae_cw.empty:
-            emp_q = ae_cw[
+        if has_cw:
+            # Use close_date to attribute deals to quarters; deduplicate by opportunity
+            emp_q_raw = ae_cw[
                 (ae_cw["employee_id"] == employee_id) &
-                (ae_cw["month"].isin(qm))
+                ae_cw["close_date"].apply(lambda d: _in_qm_det(d, qm))
             ]
-            q_acv          = float(emp_q["acv_eur"].sum())
-            deals_count    = len(emp_q)
+            emp_q = emp_q_raw.drop_duplicates("opportunity_id")
+            if "opportunity_acv_eur" in emp_q.columns:
+                q_acv = float(emp_q["opportunity_acv_eur"].sum())
+            else:
+                q_acv = float(emp_q["acv_eur"].sum()) if "acv_eur" in emp_q.columns else 0.0
+            deals_count = len(emp_q)
             if "is_forecast" in emp_q.columns:
                 forecast_count = int(emp_q["is_forecast"].sum())
                 invoiced_count = deals_count - forecast_count
@@ -190,45 +226,63 @@ def ae_detail(model, employee_id: str, year: int) -> dict:
             "forecast_count":  forecast_count,
         })
 
-    # Year-end commission row from December commission_detail
+    # Find all earning quarters for this employee in this year
+    # (multiple rows when paid quarterly; final row has annual accelerators)
     year_end: dict = {}
-    if not model.commission_detail.empty:
-        dec_month = pd.Timestamp(year=year, month=12, day=1)
-        det = model.commission_detail[
-            (model.commission_detail["employee_id"] == employee_id) &
-            (model.commission_detail["month"] == dec_month)
-        ]
-        if not det.empty:
-            row = det.iloc[0].to_dict()
-            year_end = {k: (v.strftime("%Y-%m-%d") if isinstance(v, pd.Timestamp) else v)
-                        for k, v in row.items()}
-
-    # Also pull Q4 accelerator row if available
+    all_accelerators: list = []
     if not model.accelerators.empty:
-        acc_q4 = model.accelerators[
+        emp_acc = model.accelerators[
             (model.accelerators["employee_id"] == employee_id) &
-            (model.accelerators["year"] == year) &
-            (model.accelerators["quarter"] == 4)
-        ]
-        if not acc_q4.empty:
-            acc_row = acc_q4.iloc[0].to_dict()
-            acc_row = {k: (v.strftime("%Y-%m-%d") if isinstance(v, pd.Timestamp) else v)
-                       for k, v in acc_row.items()}
-            year_end["accelerator"] = acc_row
+            (model.accelerators["year"] == year)
+        ].sort_values("quarter")
+        if not emp_acc.empty:
+            # Collect all quarterly accelerator rows for the UI
+            for _, acc_row_s in emp_acc.iterrows():
+                acc_row = acc_row_s.to_dict()
+                acc_row = {k: (v.strftime("%Y-%m-%d") if isinstance(v, pd.Timestamp) else v)
+                           for k, v in acc_row.items()}
+                all_accelerators.append(acc_row)
+
+            # year_end points to the final quarter's commission detail row
+            final_q    = int(emp_acc.iloc[-1]["quarter"])
+            comm_month = pd.Timestamp(year=year, month=final_q * 3, day=1)
+            if not model.commission_detail.empty:
+                det = model.commission_detail[
+                    (model.commission_detail["employee_id"] == employee_id) &
+                    (model.commission_detail["month"] == comm_month)
+                ]
+                if not det.empty:
+                    row = det.iloc[0].to_dict()
+                    year_end = {k: (v.strftime("%Y-%m-%d") if isinstance(v, pd.Timestamp) else v)
+                                for k, v in row.items()}
+            year_end["accelerator"]      = all_accelerators[-1] if all_accelerators else {}
+            year_end["all_accelerators"] = all_accelerators
 
     ytd_acv = sum(q["q_acv_eur"] for q in quarters_out)
     att_pct = round((ytd_acv / annual_target_eur) * 100, 1) if annual_target_eur > 0 else 0.0
 
+    # Total commission = sum of all quarterly payouts
+    total_commission = 0.0
+    if not model.commission_detail.empty:
+        all_months_for_year = [pd.Timestamp(year=year, month=q * 3, day=1) for q in range(1, 5)]
+        det_all = model.commission_detail[
+            (model.commission_detail["employee_id"] == employee_id) &
+            (model.commission_detail["month"].isin(all_months_for_year)) &
+            (model.commission_detail["accelerator_topup"] > 0)
+        ]
+        total_commission = round(float(det_all["accelerator_topup"].sum()), 2)
+
     emp["annual_target_eur"]     = annual_target_eur
     emp["annual_attainment_pct"] = att_pct
     emp["ytd_acv_eur"]           = round(ytd_acv, 2)
-    emp["year_end_commission"]   = float(year_end.get("accelerator_topup", 0) or 0)
+    emp["year_end_commission"]   = total_commission
 
     return {
-        "employee": emp,
-        "quarters": quarters_out,
-        "year_end": year_end,
-        "year":     year,
+        "employee":        emp,
+        "quarters":        quarters_out,
+        "year_end":        year_end,
+        "all_accelerators": all_accelerators,
+        "year":            year,
     }
 
 

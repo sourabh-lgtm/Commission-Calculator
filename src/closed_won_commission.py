@@ -473,8 +473,10 @@ def _empty_df() -> pd.DataFrame:
 
 def _empty_ae_df() -> pd.DataFrame:
     return pd.DataFrame(columns=[
-        "employee_id", "opportunity_id", "opportunity_name", "acv_eur",
-        "multi_year_acv_eur", "invoice_date", "month", "close_date",
+        "employee_id", "opportunity_id", "opportunity_name",
+        "acv_eur", "multi_year_acv_eur",
+        "opportunity_acv_eur", "opportunity_multi_year_acv_eur",
+        "invoice_date", "month", "close_date",
         "is_forecast", "document_number", "invoice_currency", "invoicing_cadence",
     ])
 
@@ -695,18 +697,21 @@ def build_ae_closed_won_commission(
             commission_acv_my = deal_acv_my if is_first else 0.0
 
             rows.append({
-                "employee_id":       r["employee_id"],
-                "opportunity_id":    r["opportunity_id"],
-                "opportunity_name":  r.get("opportunity_name", r["opportunity_id"]),
-                "acv_eur":           round(commission_acv_fy, 2),
-                "multi_year_acv_eur": round(commission_acv_my, 2),
-                "invoice_date":      invoice_dt,
-                "month":             period_ts.to_period("M").to_timestamp(),
-                "close_date":        r["close_date"],
-                "is_forecast":       False,
-                "document_number":   str(r.get("Document Number", "")).strip(),
-                "invoice_currency":  inv_currency,
-                "invoicing_cadence": r.get("invoicing_cadence", ""),
+                "employee_id":                    r["employee_id"],
+                "opportunity_id":                 r["opportunity_id"],
+                "opportunity_name":               r.get("opportunity_name", r["opportunity_id"]),
+                "acv_eur":                        round(commission_acv_fy, 2),
+                "multi_year_acv_eur":             round(commission_acv_my, 2),
+                # Full deal-level ACV (pre-invoice-split) — used for quarterly gate/commission
+                "opportunity_acv_eur":            round(deal_acv_fy, 2),
+                "opportunity_multi_year_acv_eur": round(deal_acv_my, 2),
+                "invoice_date":                   invoice_dt,
+                "month":                          period_ts.to_period("M").to_timestamp(),
+                "close_date":                     r["close_date"],
+                "is_forecast":                    False,
+                "document_number":                str(r.get("Document Number", "")).strip(),
+                "invoice_currency":               inv_currency,
+                "invoicing_cadence":              r.get("invoicing_cadence", ""),
             })
 
     # ------------------------------------------------------------------
@@ -728,19 +733,22 @@ def build_ae_closed_won_commission(
         for i in range(n):
             inv_month = (close_dt + pd.DateOffset(months=months_between * i)).to_period("M").to_timestamp()
             rows.append({
-                "employee_id":        r["employee_id"],
-                "opportunity_id":     r["opportunity_id"],
-                "opportunity_name":   r.get("opportunity_name", r["opportunity_id"]),
-                "acv_eur":            acv_fy_per,
+                "employee_id":                    r["employee_id"],
+                "opportunity_id":                 r["opportunity_id"],
+                "opportunity_name":               r.get("opportunity_name", r["opportunity_id"]),
+                "acv_eur":                        acv_fy_per,
                 # Multi-year ACV paid in full on the first invoice only
-                "multi_year_acv_eur": round(acv_my, 2) if i == 0 else 0.0,
-                "invoice_date":       inv_month,
-                "month":              inv_month,
-                "close_date":         close_dt,
-                "is_forecast":        True,
-                "document_number":    "",
-                "invoice_currency":   "EUR",
-                "invoicing_cadence":  cadence,
+                "multi_year_acv_eur":             round(acv_my, 2) if i == 0 else 0.0,
+                # Full deal-level ACV (pre-invoice-split)
+                "opportunity_acv_eur":            round(acv_fy, 2),
+                "opportunity_multi_year_acv_eur": round(acv_my, 2),
+                "invoice_date":                   inv_month,
+                "month":                          inv_month,
+                "close_date":                     close_dt,
+                "is_forecast":                    True,
+                "document_number":                "",
+                "invoice_currency":               "EUR",
+                "invoicing_cadence":              cadence,
             })
             forecast_count += 1
 

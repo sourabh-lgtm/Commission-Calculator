@@ -8,6 +8,18 @@ SHARED_TABS_HTML = """
   <div class="controls">
     <label>Employee</label>
     <select id="wk-emp" onchange="loadWorkings()"></select>
+    <!-- Quarter selector — shown for AE only (toggled via JS) -->
+    <span id="wk-quarter-controls" style="display:none">
+      <label style="margin-left:12px">Year</label>
+      <select id="wk-year" onchange="loadWorkings()"></select>
+      <label style="margin-left:8px">Quarter</label>
+      <select id="wk-quarter" onchange="loadWorkings()">
+        <option value="1">Q1 (Jan–Mar)</option>
+        <option value="2">Q2 (Apr–Jun)</option>
+        <option value="3">Q3 (Jul–Sep)</option>
+        <option value="4">Q4 (Oct–Dec)</option>
+      </select>
+    </span>
     <button class="btn" onclick="previewPDF()">Preview PDF</button>
   </div>
   <div class="kpi-grid" id="wk-kpis"></div>

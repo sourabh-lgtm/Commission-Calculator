@@ -1,18 +1,28 @@
 """Account Executive (AE) commission plan — FY26.
 
 Commission structure:
-  - Paid on invoicing (same timing as SDR closed-won).
-  - Quarterly gate: if quarterly 1st-year ACV < 50% of quarterly target → no commission.
+  - Quarterly gate: if quarterly 1st-year ACV (by close date) < 50% of quarterly target
+    → that quarter earns no commission.
   - Base rate: 10% of 1st-year ACV (for qualifying quarters).
   - Multi-year bonus: +1% of ACV beyond year 1 (multi-year incremental ACV).
   - Annual Accelerator 1: 12% on incremental ACV between 100-150% of annual target.
   - Annual Accelerator 2: 15% on incremental ACV above 150% of annual target.
-  - Accelerators are a year-end true-up, booked in Q4.
+  - Accelerators are a year-end true-up, booked in the final quarter.
 
-Commission is booked quarterly (in the quarter-end month):
-  - calculate_monthly() returns ACV pipeline data with zero commission amounts.
-  - calculate_quarterly_accelerator() computes all commission for the quarter,
-    applies the 50% gate, and returns the total as accelerator_topup.
+Payout timing:
+  - Commission is paid at the end of each qualifying quarter (March / June / Sep / Dec).
+  - Exception: if a deal closes in one quarter but is invoiced in a future quarter,
+    the commission is paid in the invoice month (immediately when invoiced).
+  - The quarterly gate and ACV attribution always use the deal's CLOSE DATE.
+  - Annual accelerators are added in the final earning quarter (Q4 for full-year
+    employees; earlier for leavers).
+
+calculate_monthly() returns ACV pipeline data (zero commission amounts).
+calculate_quarterly_accelerator() runs for EACH quarter:
+  - Uses close_date to bucket deals into the quarter.
+  - Applies the 50% gate.
+  - Returns base + multi-year commission as accelerator_topup (booked to quarter-end).
+  - At the final quarter only: also computes annual accelerator tiers.
 
 Per-employee targets are loaded from data/ae_targets.csv (keyed by employee_id + year).
 AE closed-won data is passed via cs_performance['ae_closed_won'].
@@ -113,11 +123,14 @@ class AECommissionPlan(BaseCommissionPlan):
         }
 
     # ------------------------------------------------------------------
-    # Year-end pass — all commission paid once in Q4 (year-end true-up)
+    # Quarterly pass — commission paid at the end of every qualifying quarter.
     #
-    # Mirrors the CS NRR accelerator pattern: Q1–Q3 return zero; Q4 sums
-    # the full year's qualifying ACV (per-quarter 50% gate still applies)
-    # and adds the annual accelerator tiers on top.
+    # Deal attribution uses CLOSE DATE (not invoice period) to determine
+    # which quarter each deal belongs to.  The 50% quarterly gate is checked
+    # against the close-date-based ACV for that quarter.
+    #
+    # Annual accelerator tiers are computed only in the final earning quarter
+    # (Q4 for full-year employees, earlier for leavers).
     # ------------------------------------------------------------------
     def calculate_quarterly_accelerator(
         self,
@@ -135,29 +148,40 @@ class AECommissionPlan(BaseCommissionPlan):
         q_end  = quarter_end_month(months[0])
 
         _zero = {
-            "employee_id":              emp_id,
-            "year":                     year,
-            "quarter":                  quarter,
-            "quarter_end_month":        q_end,
-            "currency":                 currency,
-            "fx_rate":                  1.0,
-            "annual_target_eur":        0.0,
+            "employee_id":               emp_id,
+            "year":                      year,
+            "quarter":                   quarter,
+            "quarter_end_month":         q_end,
+            "currency":                  currency,
+            "fx_rate":                   1.0,
+            "annual_target_eur":         0.0,
             "annual_acv_first_year_eur": 0.0,
             "annual_acv_multi_year_eur": 0.0,
-            "annual_attainment_pct":    0.0,
-            "qualifying_acv_eur":       0.0,
-            "base_commission":          0.0,
-            "multi_year_commission":    0.0,
-            "accelerator_1":            0.0,
-            "accelerator_2":            0.0,
-            "accelerator_topup":        0.0,
+            "annual_attainment_pct":     0.0,
+            "qualifying_acv_eur":        0.0,
+            "base_commission":           0.0,
+            "multi_year_commission":     0.0,
+            "accelerator_1":             0.0,
+            "accelerator_2":             0.0,
+            "accelerator_topup":         0.0,
         }
 
-        # Only pay at year-end (Q4)
-        if quarter != 4:
+        # Determine the final earning quarter: Q4 by default, earlier for leavers.
+        plan_end = employee.get("plan_end_date")
+        final_quarter = 4
+        if pd.notna(plan_end):
+            plan_end_month = pd.Timestamp(plan_end).to_period("M").to_timestamp()
+            for q_check in range(1, 4):  # Q1–Q3 only; Q4 is the default
+                q_months_check = quarter_months(year, q_check)
+                if q_months_check[0] <= plan_end_month <= q_months_check[-1]:
+                    final_quarter = q_check
+                    break
+
+        # Skip quarters after the final earning quarter for this employee
+        if quarter > final_quarter:
             return _zero
 
-        # --- FX rate (year-end month) ---
+        # --- FX rate (quarter-end month) ---
         fx_df   = cs_performance.get("fx_rates", pd.DataFrame()) if cs_performance else pd.DataFrame()
         fx_rate = get_fx_rate(fx_df, q_end, currency) if not fx_df.empty else 1.0
         _zero["fx_rate"] = fx_rate
@@ -182,64 +206,97 @@ class AECommissionPlan(BaseCommissionPlan):
         if annual_target_eur == 0.0:
             return _zero
 
-        # --- Full-year AE closed-won data ---
+        # --- AE closed-won data ---
         ae_cw = cs_performance.get("ae_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
         if ae_cw.empty:
             return _zero
 
-        yr_months = []
-        for q in range(1, 5):
-            yr_months.extend(quarter_months(year, q))
+        # Helper: is a close_date in a given list of quarter months?
+        def _in_months(d, qm):
+            if pd.isna(d):
+                return False
+            return pd.Timestamp(d).to_period("M").to_timestamp() in qm
 
-        emp_yr = ae_cw[
+        # --- Deals for this quarter (by close_date) ---
+        # Deduplicate by opportunity_id so multi-invoice deals count once.
+        # Use opportunity_acv_eur (full deal 1st-year ACV from InputData) when available;
+        # fall back to summing acv_eur per invoice row.
+        q_data = ae_cw[
             (ae_cw["employee_id"] == emp_id) &
-            (ae_cw["month"].isin(yr_months))
+            ae_cw["close_date"].apply(lambda d: _in_months(d, months))
         ]
+        q_deals = q_data.drop_duplicates("opportunity_id")
 
-        annual_acv_fy = float(emp_yr["acv_eur"].sum())
-        annual_acv_my = float(emp_yr["multi_year_acv_eur"].sum()) if "multi_year_acv_eur" in emp_yr.columns else 0.0
+        if "opportunity_acv_eur" in q_deals.columns:
+            q_acv_fy = float(q_deals["opportunity_acv_eur"].sum())
+        else:
+            q_acv_fy = float(q_data["acv_eur"].sum())
 
-        # --- Per-quarter 50% gate: sum only ACV from quarters that met the gate ---
-        qualifying_acv_fy = 0.0
-        qualifying_acv_my = 0.0
-        q_gate_results: dict[int, bool] = {}
+        if "opportunity_multi_year_acv_eur" in q_deals.columns:
+            q_acv_my = float(q_deals["opportunity_multi_year_acv_eur"].sum())
+        elif "multi_year_acv_eur" in q_data.columns:
+            # First row per opportunity has the full multi-year ACV
+            q_acv_my = float(q_data.drop_duplicates("opportunity_id")["multi_year_acv_eur"].sum())
+        else:
+            q_acv_my = 0.0
 
-        for q in range(1, 5):
-            qm = quarter_months(year, q)
-            q_data = ae_cw[
-                (ae_cw["employee_id"] == emp_id) &
-                (ae_cw["month"].isin(qm))
-            ]
-            q_acv = float(q_data["acv_eur"].sum())
+        # --- 50% gate for this quarter ---
+        gate_met = q_acv_fy >= q_target_eur * QUARTERLY_GATE if q_target_eur > 0 else False
+        qualifying_acv_fy = q_acv_fy if gate_met else 0.0
+        qualifying_acv_my = q_acv_my if gate_met else 0.0
 
-            # Ramp Q1: same gate threshold applies (targets are already set for ramp)
-            gate_met = q_acv >= q_target_eur * QUARTERLY_GATE if q_target_eur > 0 else False
-            q_gate_results[q] = gate_met
-
-            if gate_met:
-                qualifying_acv_fy += q_acv
-                if "multi_year_acv_eur" in q_data.columns:
-                    qualifying_acv_my += float(q_data["multi_year_acv_eur"].sum())
-
-        # --- Base commission on qualifying ACV ---
+        # --- Base commission for this quarter ---
         base_comm = round(qualifying_acv_fy * BASE_RATE * fx_rate, 2)
         my_comm   = round(qualifying_acv_my * MULTI_YEAR_RATE * fx_rate, 2)
 
-        # --- Annual accelerators on total annual ACV (all quarters, no gate) ---
+        # --- Annual accelerators and full-year gate summary (final quarter only) ---
         accel_1 = 0.0
         accel_2 = 0.0
-        tier1_start = annual_target_eur * 1.0
-        tier1_end   = annual_target_eur * 1.5
+        annual_acv_fy  = q_acv_fy
+        annual_acv_my  = q_acv_my
+        q_gate_results: dict[int, bool] = {quarter: gate_met}
 
-        if annual_acv_fy > tier1_start:
-            tier1_acv = min(annual_acv_fy, tier1_end) - tier1_start
-            accel_1 = round(tier1_acv * ACCELERATOR_1_RATE * fx_rate, 2)
+        if quarter == final_quarter:
+            # Recompute full-year ACV and gate results from close_date for all quarters
+            annual_acv_fy = 0.0
+            annual_acv_my = 0.0
+            q_gate_results = {}
 
-        if annual_acv_fy > tier1_end:
-            tier2_acv = annual_acv_fy - tier1_end
-            accel_2 = round(tier2_acv * ACCELERATOR_2_RATE * fx_rate, 2)
+            for q_check in range(1, 5):
+                qm_c = quarter_months(year, q_check)
+                q_data_c = ae_cw[
+                    (ae_cw["employee_id"] == emp_id) &
+                    ae_cw["close_date"].apply(lambda d: _in_months(d, qm_c))
+                ]
+                q_deals_c = q_data_c.drop_duplicates("opportunity_id")
+                if "opportunity_acv_eur" in q_deals_c.columns:
+                    qc_acv = float(q_deals_c["opportunity_acv_eur"].sum())
+                else:
+                    qc_acv = float(q_data_c["acv_eur"].sum())
+                qc_gate = qc_acv >= q_target_eur * QUARTERLY_GATE if q_target_eur > 0 else False
+                q_gate_results[q_check] = qc_gate
+                annual_acv_fy += qc_acv
+                if "opportunity_multi_year_acv_eur" in q_deals_c.columns:
+                    annual_acv_my += float(q_deals_c["opportunity_multi_year_acv_eur"].sum())
+                elif "multi_year_acv_eur" in q_data_c.columns:
+                    annual_acv_my += float(q_data_c.drop_duplicates("opportunity_id")["multi_year_acv_eur"].sum())
+
+            # Annual accelerators on total annual ACV (gate-independent)
+            tier1_start = annual_target_eur * 1.0
+            tier1_end   = annual_target_eur * 1.5
+
+            if annual_acv_fy > tier1_start:
+                tier1_acv = min(annual_acv_fy, tier1_end) - tier1_start
+                accel_1 = round(tier1_acv * ACCELERATOR_1_RATE * fx_rate, 2)
+
+            if annual_acv_fy > tier1_end:
+                tier2_acv = annual_acv_fy - tier1_end
+                accel_2 = round(tier2_acv * ACCELERATOR_2_RATE * fx_rate, 2)
 
         total_topup = round(base_comm + my_comm + accel_1 + accel_2, 2)
+
+        if total_topup == 0:
+            return _zero
 
         return {
             "employee_id":               emp_id,
@@ -249,21 +306,37 @@ class AECommissionPlan(BaseCommissionPlan):
             "currency":                  currency,
             "fx_rate":                   fx_rate,
             "annual_target_eur":         annual_target_eur,
+            # Per-quarter ACV (by close_date)
+            "q_acv_first_year_eur":      round(q_acv_fy, 2),
+            "q_acv_multi_year_eur":      round(q_acv_my, 2),
+            "q_attainment_pct":          round((q_acv_fy / q_target_eur) * 100, 1) if q_target_eur > 0 else 0.0,
+            "gate_met":                  gate_met,
+            "qualifying_acv_eur":        round(qualifying_acv_fy, 2),
+            # Annual ACV (populated at final_quarter; equals quarterly for mid-year)
             "annual_acv_first_year_eur": round(annual_acv_fy, 2),
             "annual_acv_multi_year_eur": round(annual_acv_my, 2),
-            "annual_attainment_pct":     round((annual_acv_fy / annual_target_eur) * 100, 1),
-            "qualifying_acv_eur":        round(qualifying_acv_fy, 2),
-            "q_gate_results":            q_gate_results,
-            "is_ramp_q1":                is_ramp_q1,
+            "annual_attainment_pct":     round((annual_acv_fy / annual_target_eur) * 100, 1) if annual_target_eur > 0 else 0.0,
+            # Commission components
             "base_commission":           base_comm,
             "multi_year_commission":     my_comm,
             "accelerator_1":             accel_1,
             "accelerator_2":             accel_2,
             "accelerator_topup":         total_topup,
+            # Gate summary (all 4 quarters at final_quarter; just this quarter otherwise)
+            "q_gate_results":            q_gate_results,
+            "is_ramp_q1":                is_ramp_q1,
         }
 
     # ------------------------------------------------------------------
-    # Deal-level workings rows (per invoice in the month)
+    # Deal-level workings rows.
+    #
+    # When quarter + year are supplied (AE quarterly view):
+    #   - Filter deals by close_date falling in that quarter.
+    #   - Use quarter-end month FX rate.
+    #   - Show close_date as the row date.
+    #
+    # When only month is supplied (invoice-period view, fallback):
+    #   - Filter deals by invoice month (existing behaviour).
     # ------------------------------------------------------------------
     def get_workings_rows(
         self,
@@ -273,10 +346,11 @@ class AECommissionPlan(BaseCommissionPlan):
         closed_won: pd.DataFrame,
         fx_df: pd.DataFrame,
         cs_performance: dict = None,
+        quarter: int = None,
+        year: int = None,
     ) -> list[dict]:
         emp_id   = employee["employee_id"]
         currency = employee["currency"]
-        fx_rate  = get_fx_rate(fx_df, month, currency)
 
         rows = []
 
@@ -284,21 +358,47 @@ class AECommissionPlan(BaseCommissionPlan):
         if ae_cw.empty:
             return rows
 
-        emp_month = ae_cw[
-            (ae_cw["employee_id"] == emp_id) & (ae_cw["month"] == month)
-        ].sort_values("invoice_date" if "invoice_date" in ae_cw.columns else ae_cw.columns[0])
+        if quarter is not None and year is not None:
+            # Quarterly view: bucket deals by close_date, ONE ROW per opportunity
+            qm = quarter_months(year, quarter)
+            fx_rate = get_fx_rate(fx_df, qm[-1], currency)
 
-        for _, r in emp_month.iterrows():
+            def _in_qm(d):
+                if pd.isna(d):
+                    return False
+                return pd.Timestamp(d).to_period("M").to_timestamp() in qm
+
+            emp_deals = (
+                ae_cw[
+                    (ae_cw["employee_id"] == emp_id) &
+                    ae_cw["close_date"].apply(_in_qm)
+                ]
+                .drop_duplicates("opportunity_id")   # one row per deal
+                .sort_values("close_date")
+            )
+            date_col = "close_date"
+        else:
+            # Monthly / invoice-period view (fallback)
+            fx_rate   = get_fx_rate(fx_df, month, currency)
+            emp_deals = ae_cw[
+                (ae_cw["employee_id"] == emp_id) & (ae_cw["month"] == month)
+            ].sort_values("invoice_date" if "invoice_date" in ae_cw.columns else ae_cw.columns[0])
+            date_col  = "invoice_date"
+
+        for _, r in emp_deals.iterrows():
             is_forecast = bool(r.get("is_forecast", False))
-            acv_fy  = float(r["acv_eur"])
-            acv_my  = float(r.get("multi_year_acv_eur", 0.0))
+            # Use full deal ACV (opportunity_acv_eur) if available; fall back to row ACV
+            acv_fy  = float(r.get("opportunity_acv_eur") or r["acv_eur"])
+            acv_my  = float(r.get("opportunity_multi_year_acv_eur") or r.get("multi_year_acv_eur", 0.0))
 
-            inv_date = r.get("invoice_date")
-            date_str = inv_date.strftime("%Y-%m-%d") if pd.notna(inv_date) else ""
+            raw_date = r.get(date_col)
+            if raw_date is None and date_col == "close_date":
+                raw_date = r.get("invoice_date")
+            date_str = pd.Timestamp(raw_date).strftime("%Y-%m-%d") if pd.notna(raw_date) else ""
             doc_num  = str(r.get("document_number", "")).strip()
             opp_name = str(r.get("opportunity_name", r.get("opportunity_id", ""))).strip()
             row_type = "Forecast Deal" if is_forecast else "Closed Won"
-            label    = f"10% of ACV × {fx_rate:.4f}"
+            label    = f"10% of ACV \u00d7 {fx_rate:.4f}"
             if is_forecast:
                 label += " (forecast)"
 

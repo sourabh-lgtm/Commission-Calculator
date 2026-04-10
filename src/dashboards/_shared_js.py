@@ -75,6 +75,7 @@ function rebuildEmpDropdowns() {
     });
     if (filtered.some(e => e.employee_id === prev)) el.value = prev;
   });
+  _wkUpdateQuarterControls();
 }
 
 // ============================================================
@@ -96,11 +97,57 @@ function showTab(name) {
 // Shared tab loaders — Workings, SPIFs, Approve & Send,
 //                      Payroll, Accruals, Data
 // ============================================================
+function _wkUpdateQuarterControls() {
+  const isAe = globalRole() === 'ae';
+  const ctrl = document.getElementById('wk-quarter-controls');
+  if (ctrl) ctrl.style.display = isAe ? '' : 'none';
+
+  if (isAe) {
+    // Populate year selector from available months if not already done
+    const yrEl = document.getElementById('wk-year');
+    if (yrEl && yrEl.options.length === 0) {
+      const years = [...new Set(months.map(m => m.slice(0,4)))].sort();
+      years.forEach(y => {
+        const opt = document.createElement('option');
+        opt.value = y; opt.text = y;
+        yrEl.appendChild(opt);
+      });
+      // Default to latest year
+      if (years.length) yrEl.value = years[years.length - 1];
+    }
+    // Default quarter to current calendar quarter
+    const qEl = document.getElementById('wk-quarter');
+    if (qEl && qEl.value === '') {
+      const now = new Date();
+      qEl.value = Math.ceil((now.getMonth() + 1) / 3);
+    }
+  }
+}
+
 async function loadWorkings() {
   const empId = document.getElementById('wk-emp').value;
   const month = document.getElementById('global-month').value;
-  if (!empId || !month) return;
-  const res  = await fetch('/api/commission_workings?employee_id=' + empId + '&month=' + month);
+  if (!empId) return;
+
+  const isAe = globalRole() === 'ae';
+  _wkUpdateQuarterControls();
+
+  let url;
+  let displayPeriod;
+  if (isAe) {
+    const year    = document.getElementById('wk-year')?.value;
+    const quarter = document.getElementById('wk-quarter')?.value;
+    if (!year || !quarter) return;
+    url = '/api/commission_workings?employee_id=' + empId + '&year=' + year + '&quarter=' + quarter;
+    const qLabels = {1:'Q1 (Jan\u2013Mar)',2:'Q2 (Apr\u2013Jun)',3:'Q3 (Jul\u2013Sep)',4:'Q4 (Oct\u2013Dec)'};
+    displayPeriod = 'Q' + quarter + ' ' + year;
+  } else {
+    if (!month) return;
+    url = '/api/commission_workings?employee_id=' + empId + '&month=' + month;
+    displayPeriod = fmtMonth(month);
+  }
+
+  const res  = await fetch(url);
   const data = await res.json();
   const {rows, summary} = data;
   const cur = summary.currency || 'EUR';
@@ -219,19 +266,29 @@ async function loadWorkings() {
   // ---- AE (Account Executive) ----
   if (globalRole() === 'ae') {
     const kpiEl = document.getElementById('wk-kpis');
+    const acc   = summary.accelerator || {};
     const invoicedRows = rows.filter(r => !r.is_forecast);
-    const totalAcvFY  = rows.reduce((s,r) => s + (r.acv_eur||0), 0);
-    const totalAcvMY  = rows.reduce((s,r) => s + (r.multi_year_acv_eur||0), 0);
-    const totalBaseC  = invoicedRows.reduce((s,r) => s + (r.base_commission||0), 0);
-    const totalMyC    = invoicedRows.reduce((s,r) => s + (r.my_commission||0), 0);
+    const totalAcvFY   = rows.reduce((s,r) => s + (r.acv_eur||0), 0);
+    const totalAcvMY   = rows.reduce((s,r) => s + (r.multi_year_acv_eur||0), 0);
+    const totalBaseC   = invoicedRows.reduce((s,r) => s + (r.base_commission||0), 0);
+    const totalMyC     = invoicedRows.reduce((s,r) => s + (r.my_commission||0), 0);
+    const gateStr      = acc.gate_met != null ? (acc.gate_met ? '\u2713 Gate met' : '\u2717 Gate not met') : '';
+    const attStr       = acc.q_attainment_pct != null ? acc.q_attainment_pct.toFixed(1) + '% attainment' : '';
+    const accel1       = acc.accelerator_1 || 0;
+    const accel2       = acc.accelerator_2 || 0;
+    const totalTopup   = acc.accelerator_topup || (totalBaseC + totalMyC + accel1 + accel2);
 
     kpiEl.innerHTML =
-      kpiCard('1st-year ACV', '\u20ac' + fmtNum(totalAcvFY), fmtMonth(month)) +
+      kpiCard('1st-year ACV (close date)', '\u20ac' + fmtNum(totalAcvFY), attStr || displayPeriod) +
       kpiCard('Multi-year ACV', '\u20ac' + fmtNum(totalAcvMY), 'Incremental TCV') +
-      kpiCard('Base Commission (10%)', fmtAmt(totalBaseC, cur), 'Year-end payment') +
-      (totalMyC > 0 ? kpiCard('Multi-yr Commission (1%)', fmtAmt(totalMyC, cur), 'Year-end payment') : '');
+      kpiCard('Gate', gateStr || '\u2014', acc.q_target_eur ? '\u20ac' + fmtNum(acc.q_target_eur) + ' quarterly target' : '') +
+      kpiCard('Base Commission (10%)', fmtAmt(totalBaseC, cur), displayPeriod) +
+      (totalMyC > 0 ? kpiCard('Multi-yr Commission (1%)', fmtAmt(totalMyC, cur), displayPeriod) : '') +
+      (accel1 > 0 ? kpiCard('Accelerator Tier 1 (12%)', fmtAmt(accel1, cur), '100\u2013150% of target') : '') +
+      (accel2 > 0 ? kpiCard('Accelerator Tier 2 (15%)', fmtAmt(accel2, cur), '>150% of target') : '') +
+      (totalTopup > 0 ? kpiCard('Total Payout', fmtAmt(totalTopup, cur), displayPeriod) : '');
 
-    const heads = ['Date','Opportunity','Doc #','Cadence','1st-yr ACV (EUR)','Multi-yr ACV (EUR)','FX','Base Comm (10%)','Multi-yr Comm (1%)','Total'];
+    const heads = ['Close Date','Opportunity','Doc #','Cadence','1st-yr ACV (EUR)','Multi-yr ACV (EUR)','FX','Base Comm (10%)','Multi-yr Comm (1%)','Total'];
     const rowData = rows.map(r => {
       const baseC  = r.base_commission || 0;
       const myC    = r.my_commission   || 0;
@@ -257,7 +314,7 @@ async function loadWorkings() {
 
     if (!rowData.length) {
       document.getElementById('wk-table').innerHTML =
-        '<tr><td colspan="10" style="color:var(--dim);padding:12px">No deals invoiced this month. Commission is paid as a year-end lump sum in December.</td></tr>';
+        '<tr><td colspan="10" style="color:var(--dim);padding:12px">No deals closed in ' + displayPeriod + '. Commission is paid at quarter-end for qualifying quarters.</td></tr>';
     } else {
       renderTable('wk-table', heads, rowData);
     }

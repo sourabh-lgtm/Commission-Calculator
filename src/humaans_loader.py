@@ -106,7 +106,9 @@ _COUNTRY_MAP: dict[str, tuple[str, str]] = {
 }
 
 
-def _get_region(country: str) -> str:
+def _get_region(country) -> str:
+    if not country or not isinstance(country, str):
+        return "Other"
     return _COUNTRY_MAP.get(country.strip().lower(), ("Other", "EUR"))[0]
 
 
@@ -172,6 +174,7 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         "Role effective date": "role_eff_date",
         "Employee ID":         "employee_id",
         "Employment start":    "employment_start",
+        "Employment end":      "employment_end",
         "Salary amount":       "salary_amount",
         "Salary currency":     "salary_currency",
         "Salary frequency":    "salary_frequency",
@@ -180,20 +183,28 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     })
 
     # Parse dates
-    for col in ("role_eff_date", "salary_eff_date", "employment_start"):
-        raw[col] = pd.to_datetime(raw[col], errors="coerce")
+    for col in ("role_eff_date", "salary_eff_date", "employment_start", "employment_end"):
+        if col in raw.columns:
+            raw[col] = pd.to_datetime(raw[col], errors="coerce")
 
-    raw["salary_amount"] = pd.to_numeric(raw["salary_amount"], errors="coerce").fillna(0)
-    raw["employee_id"]   = raw["employee_id"].astype(str).str.strip()
-    raw["email"]         = raw["email"].str.strip().str.lower()
-    raw["manager_email"] = raw["manager_email"].fillna("").str.strip().str.lower()
+    raw["salary_amount"]   = pd.to_numeric(raw["salary_amount"], errors="coerce").fillna(0)
+    raw["employee_id"]     = raw["employee_id"].astype(str).str.strip()
+    raw["email"]           = raw["email"].fillna("").str.strip().str.lower()
+    raw["manager_email"]   = raw["manager_email"].fillna("").str.strip().str.lower()
+    raw["salary_currency"] = raw["salary_currency"].fillna("EUR").astype(str).str.strip()
+    raw["country"]         = raw["country"].fillna("").astype(str).str.strip()
+    raw["title"]           = raw["title"].fillna("").astype(str).str.strip()
+    raw["department"]      = raw["department"].fillna("").astype(str).str.strip()
+    if "cost_center_code" in raw.columns:
+        raw["cost_center_code"] = raw["cost_center_code"].fillna("").astype(str).str.strip()
 
     # Build full name
     raw["name"] = (raw["first_name"].str.strip() + " " + raw["last_name"].str.strip()).str.strip()
 
     # Normalise salary to monthly
+    raw["salary_frequency"] = raw["salary_frequency"].fillna("monthly")
     raw["salary_monthly"] = raw.apply(
-        lambda r: _normalize_to_monthly(r["salary_amount"], r.get("salary_frequency", "monthly")),
+        lambda r: _normalize_to_monthly(r["salary_amount"], r["salary_frequency"]),
         axis=1,
     )
 
@@ -238,7 +249,7 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             if not grp.dropna(subset=["salary_eff_date"]).empty
             else latest_role_row
         )
-        currency = latest_sal_row["salary_currency"].strip()
+        currency = str(latest_sal_row["salary_currency"]).strip() or "EUR"
 
         # plan_start_date: the FIRST date this employee held the current commission role.
         # A later row for the same role (e.g. manager email change) must not push the date forward.
@@ -251,7 +262,13 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
             plan_start = latest_role_row["role_eff_date"] if pd.notna(latest_role_row["role_eff_date"]) else emp_start
         if pd.isna(plan_start):
             plan_start = emp_start
-        plan_end = pd.Timestamp("2026-12-31")   # FY26
+        # Use Employment end if present and within FY26; otherwise default to FY26 end
+        emp_end_dates = grp["employment_end"].dropna() if "employment_end" in grp.columns else pd.Series([], dtype="datetime64[ns]")
+        employment_end = emp_end_dates.iloc[0] if not emp_end_dates.empty else pd.NaT
+        if pd.notna(employment_end) and employment_end <= pd.Timestamp("2026-12-31"):
+            plan_end = employment_end
+        else:
+            plan_end = pd.Timestamp("2026-12-31")   # FY26
 
         employees_rows.append({
             "employee_id":       str(emp_id),

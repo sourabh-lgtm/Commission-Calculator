@@ -116,6 +116,10 @@ _TABS_HTML = """
     <h3>Quarterly Breakdown</h3>
     <div class="tbl-wrap"><table id="ae-det-table"></table></div>
   </div>
+  <div id="ae-det-commission" class="panel" style="display:none">
+    <h3>Commission Breakdown</h3>
+    <div class="tbl-wrap"><table id="ae-det-comm-table"></table></div>
+  </div>
 </div>
 """
 
@@ -251,7 +255,7 @@ async function loadAEDetail() {
 
   const res  = await fetch('/api/ae_detail?employee_id=' + empId + '&year=' + yr);
   const data = await res.json();
-  const {employee: emp, quarters, year_end} = data;
+  const {employee: emp, quarters, year_end, all_accelerators} = data;
   const cur  = emp.currency || 'EUR';
 
   // KPI cards
@@ -260,11 +264,17 @@ async function loadAEDetail() {
     ? 'var(--green)' : (emp.annual_attainment_pct || 0) >= 50
     ? 'var(--orange)' : 'var(--red)';
 
+  const accList = all_accelerators || ((year_end && year_end.all_accelerators) ? year_end.all_accelerators : []);
+  const acc = (year_end && year_end.accelerator) ? year_end.accelerator : (accList.length ? accList[accList.length-1] : {});
+  const finalQ = acc.quarter || 4;
+  const qMonthNames = {1: 'March', 2: 'June', 3: 'September', 4: 'December'};
+  const commMonthLabel = commAmt > 0 ? 'Paid quarterly' : 'Not yet paid';
+
   document.getElementById('ae-det-kpis').innerHTML =
     kpiCard('Annual Target', '\u20ac' + fmtNum(emp.annual_target_eur || 0), 'EUR') +
     kpiCard('YTD ACV', '\u20ac' + fmtNum(emp.ytd_acv_eur || 0), 'EUR') +
     kpiCard('Attainment', '<span style="color:' + attColor + '">' + (emp.annual_attainment_pct || 0) + '%</span>', 'vs annual target') +
-    kpiCard('Year-end Commission', fmtAmt(commAmt, cur), commAmt > 0 ? 'Paid in December' : 'Not yet paid');
+    kpiCard('Commission', fmtAmt(commAmt, cur), commAmt > 0 ? 'Paid in ' + commMonthLabel : 'Not yet paid');
 
   // Progress bar
   const target = emp.annual_target_eur || 1;
@@ -310,6 +320,40 @@ async function loadAEDetail() {
     ];
   });
   renderTable('ae-det-table', heads, rows);
+
+  // Commission breakdown panel — one row per qualifying quarter
+  const commPanel = document.getElementById('ae-det-commission');
+  if (accList.length > 0) {
+    const sym = cur === 'GBP' ? '\u00a3' : cur === 'SEK' ? 'kr' : '\u20ac';
+    const bHeads = ['Quarter', 'Gate', 'Qualifying ACV (EUR)', 'Base Comm (10%)', 'Multi-yr Comm (1%)', 'Accel Tier1 (12%)', 'Accel Tier2 (15%)', 'Total Payout (' + cur + ')'];
+    const bRows = accList.map(a => {
+      const fx   = a.fx_rate || 1;
+      const fmtL = v => (v && v > 0) ? sym + fmtNum(v) : '\u2014';
+      const fmtE = v => (v && v > 0) ? '\u20ac' + fmtNum(v / fx) : '\u2014';
+      const qLbl = 'Q' + a.quarter + ' FY' + String(a.year || yr).slice(2);
+      const gateStr = a.gate_met
+        ? '<span style="color:var(--green);font-weight:700">\u2713</span>'
+        : '<span style="color:var(--red);font-weight:700">\u2717</span>';
+      return [
+        qLbl, gateStr,
+        fmtE(a.qualifying_acv_eur),
+        fmtL(a.base_commission),
+        fmtL(a.multi_year_commission),
+        fmtL(a.accelerator_1),
+        fmtL(a.accelerator_2),
+        '<strong>' + fmtL(a.accelerator_topup) + '</strong>',
+      ];
+    });
+    // Grand total row
+    const totalTopup = accList.reduce((s,a) => s + (a.accelerator_topup||0), 0);
+    const fxLast = (accList[accList.length-1]||{}).fx_rate || 1;
+    bRows.push(['<strong>Total</strong>', '', '', '', '', '', '',
+      '<strong>' + sym + fmtNum(totalTopup) + '</strong>']);
+    renderTable('ae-det-comm-table', bHeads, bRows);
+    commPanel.style.display = '';
+  } else {
+    commPanel.style.display = 'none';
+  }
 }
 
 // ============================================================
