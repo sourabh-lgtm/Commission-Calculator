@@ -1,4 +1,6 @@
 """SDR commission summary and workings PDF pages."""
+import math
+
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.styles import ParagraphStyle
@@ -37,8 +39,15 @@ def _summary_page(employee, period_label, summary, accelerator, currency):
 
     fx = summary.get("fx_rate", 1) or 1
 
-    out_saos = int(summary.get("outbound_sao_count", 0) or 0)
-    in_saos  = int(summary.get("inbound_sao_count", 0) or 0)
+    def _safe_int(v):
+        try:
+            f = float(v)
+            return 0 if math.isnan(f) else int(f)
+        except (TypeError, ValueError):
+            return 0
+
+    out_saos = _safe_int(summary.get("outbound_sao_count", 0))
+    in_saos  = _safe_int(summary.get("inbound_sao_count", 0))
     spif_amt = float(summary.get("spif_amount", 0) or 0)
 
     rows = [
@@ -166,7 +175,13 @@ def _workings_page(employee, period_label, rows, currency):
     spif_row_indices = []
 
     for i, r in enumerate(rows, start=1):
-        comm      = float(r.get("commission", 0))
+        comm_val  = r.get("commission")
+        try:
+            comm = 0.0 if comm_val is None else float(comm_val)
+            if math.isnan(comm):
+                comm = 0.0
+        except (TypeError, ValueError):
+            comm = 0.0
         total    += comm
         row_type  = r.get("type", "")
         is_spif   = row_type == "SPIF"
@@ -182,7 +197,7 @@ def _workings_page(employee, period_label, rows, currency):
 
         direction = (r.get("sao_type") or "").title()
         rate_desc = r.get("rate_desc", "") if not is_spif else "SPIF Award"
-        comm_str  = f"{sym}{comm:,.2f}"
+        comm_str  = "\u2014" if r.get("commission") is None else f"{sym}{comm:,.2f}"
 
         data.append([
             r.get("date", ""),

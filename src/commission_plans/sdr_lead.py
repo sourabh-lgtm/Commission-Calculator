@@ -217,10 +217,12 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
         sao_bonus      = round(sao_pot * sao_payout_pct, 2)
 
         # --- Measure 2: Team closed-won ACV (EUR, only managed SDRs) ---
+        # Attribution is by close_date, not invoice date
         q_acv_eur = 0.0
         sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        if not sdr_cw.empty and "month" in sdr_cw.columns:
-            team_cw = sdr_cw[sdr_cw["month"].isin(months)]
+        if not sdr_cw.empty and "close_date" in sdr_cw.columns:
+            close_months = sdr_cw["close_date"].dt.to_period("M").dt.to_timestamp()
+            team_cw = sdr_cw[close_months.isin(months)]
             if managed_ids and "employee_id" in team_cw.columns:
                 team_cw = team_cw[team_cw["employee_id"].astype(str).isin(managed_ids)]
             # Only count actual invoices (not forecast) to avoid double-counting
@@ -337,17 +339,19 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
         sao_bonus      = round(quarterly_bonus_gbp * MEASURE_WEIGHTS["sao"] * sao_payout_pct, 2)
 
         # ---- Team ACV (closed-won) detail ----
+        # Attribution is by close_date, not invoice date
         team_cw = pd.DataFrame()
         q_acv_eur = 0.0
         sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        if not sdr_cw.empty and "month" in sdr_cw.columns and "employee_id" in sdr_cw.columns:
+        if not sdr_cw.empty and "close_date" in sdr_cw.columns and "employee_id" in sdr_cw.columns:
+            close_months = sdr_cw["close_date"].dt.to_period("M").dt.to_timestamp()
             team_cw = sdr_cw[
-                sdr_cw["month"].isin(months)
+                close_months.isin(months)
                 & sdr_cw["employee_id"].astype(str).isin(managed_ids)
             ]
             if "is_forecast" in team_cw.columns:
                 team_cw = team_cw[~team_cw["is_forecast"]]
-            sort_col = "invoice_date" if "invoice_date" in team_cw.columns else "month"
+            sort_col = "close_date" if "close_date" in team_cw.columns else "month"
             team_cw  = team_cw.sort_values(sort_col, na_position="last")
             q_acv_eur = float(team_cw["acv_eur"].sum())
 
@@ -388,7 +392,7 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
         # Individual ACV rows
         for _, cw in team_cw.iterrows():
             sdr_name = emp_name_map.get(str(cw["employee_id"]), str(cw["employee_id"]))
-            inv_date = cw.get("invoice_date") if pd.notna(cw.get("invoice_date", pd.NaT)) else cw.get("month")
+            inv_date = cw.get("close_date") if pd.notna(cw.get("close_date", pd.NaT)) else cw.get("month")
             opp_name = str(cw.get("opportunity_name") or cw.get("opportunity_id") or "").strip()
             acv_val  = float(cw.get("acv_eur", 0) or 0)
             rows.append({
