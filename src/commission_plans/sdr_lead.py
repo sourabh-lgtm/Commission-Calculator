@@ -57,6 +57,49 @@ def _tiered_payout(attainment: float) -> float:
     return 0.0
 
 
+def _get_managed_sdr_ids(
+    emp_id: str,
+    employees_df: pd.DataFrame,
+    quarter_start: pd.Timestamp,
+    quarter_end: pd.Timestamp,
+) -> set[str]:
+    """Return SDR employee_ids that count toward this lead's quarterly commission.
+
+    Includes:
+    - Direct current reports (manager_id == emp_id, role sdr/sdr_lead)
+    - SDRs currently under OTHER sdr_leads who were hired mid-quarter: those
+      SDRs were under this lead before the new hire joined, so they count for
+      the full quarter's team performance.
+    """
+    if employees_df.empty or "manager_id" not in employees_df.columns:
+        return set()
+
+    # Direct current reports
+    mask = (
+        employees_df["manager_id"].astype(str) == str(emp_id)
+    ) & employees_df["role"].isin(["sdr", "sdr_lead"])
+    managed_ids: set[str] = set(employees_df.loc[mask, "employee_id"].astype(str))
+
+    # Other SDR leads hired during this quarter → their SDRs previously rolled
+    # up under this lead, so include them for the full quarter.
+    if "employment_start" in employees_df.columns:
+        mid_q_leads = employees_df[
+            employees_df["role"].isin(["sdr_lead"])
+            & (employees_df["employee_id"].astype(str) != str(emp_id))
+            & employees_df["employment_start"].notna()
+            & (employees_df["employment_start"] >= quarter_start)
+            & (employees_df["employment_start"] <= quarter_end)
+        ]
+        for _, other_lead in mid_q_leads.iterrows():
+            other_reports = set(employees_df[
+                (employees_df["manager_id"].astype(str) == str(other_lead["employee_id"]))
+                & employees_df["role"].isin(["sdr", "sdr_lead"])
+            ]["employee_id"].astype(str))
+            managed_ids |= other_reports
+
+    return managed_ids
+
+
 class SDRLeadCommissionPlan(BaseCommissionPlan):
     role = "sdr_lead"
 
@@ -153,14 +196,9 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
                 sao_target_q         = int(row["sao_team_target_q"].iloc[0])
                 acv_target_eur_q     = float(row["acv_team_target_eur_q"].iloc[0])
 
-        # --- Resolve managed SDR employee IDs ---
+        # --- Resolve managed SDR employee IDs (current reports + mid-quarter hires' reports) ---
         employees_df = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        managed_ids: set[str] = set()
-        if not employees_df.empty and "manager_id" in employees_df.columns:
-            mask = (
-                employees_df["manager_id"].astype(str) == str(emp_id)
-            ) & employees_df["role"].isin(["sdr", "sdr_lead"])
-            managed_ids = set(employees_df.loc[mask, "employee_id"].astype(str))
+        managed_ids = _get_managed_sdr_ids(str(emp_id), employees_df, months[0], q_end)
 
         # --- Measure 1: Team SAO count (only managed SDRs) ---
         q_sao_count = 0
@@ -272,14 +310,9 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
                 sao_target_q        = int(row["sao_team_target_q"].iloc[0])
                 acv_target_eur_q    = float(row["acv_team_target_eur_q"].iloc[0])
 
-        # Resolve managed SDR employee IDs
+        # Resolve managed SDR employee IDs (current reports + mid-quarter hires' reports)
         employees_df = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        managed_ids: set[str] = set()
-        if not employees_df.empty and "manager_id" in employees_df.columns:
-            mask = (
-                employees_df["manager_id"].astype(str) == str(emp_id)
-            ) & employees_df["role"].isin(["sdr", "sdr_lead"])
-            managed_ids = set(employees_df.loc[mask, "employee_id"].astype(str))
+        managed_ids = _get_managed_sdr_ids(str(emp_id), employees_df, months[0], q_end)
 
         # Team SAO count (only managed SDRs)
         q_sao_count = 0
