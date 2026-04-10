@@ -121,6 +121,9 @@ def _get_fx_to_eur(fx_df: pd.DataFrame, month: pd.Timestamp, currency: str) -> f
 # 1st-year ACV calculator
 # ---------------------------------------------------------------------------
 
+NR_ACV_WEIGHT = 0.50  # Non-recurring services count at 50% towards AE ACV targets
+
+
 def _calc_first_year_acv(opp_lines: pd.DataFrame) -> float:
     """Return 1st-year ACV (EUR) for a single opportunity's line items.
 
@@ -128,23 +131,24 @@ def _calc_first_year_acv(opp_lines: pd.DataFrame) -> float:
     Price (converted), Duration (years), Quantity.
     Price (converted) is the annual price per unit in EUR.
     TCV of a line = Price × Duration × Quantity.
+
+    RR lines: full value, prorated to year 1.
+    NR lines: 50% of Price × Quantity (one-time, all counted in year 1).
     """
-    # Only recurring product codes
-    rr = opp_lines[
-        opp_lines["Product Code"].astype(str).str.upper().str.startswith("RR")
-    ].copy()
+    codes = opp_lines["Product Code"].astype(str).str.upper()
+    rr = opp_lines[codes.str.startswith("RR")].copy()
+    nr = opp_lines[codes.str.startswith("NR")].copy()
 
-    if rr.empty:
+    if rr.empty and nr.empty:
         return 0.0
 
-    # Contract start = earliest line start
-    contract_start = rr["line_start"].dropna().min()
-    if pd.isna(contract_start):
-        return 0.0
-
-    year_1_cutoff = contract_start + pd.DateOffset(years=1)
+    # Contract start = earliest RR line start (NR lines have no duration)
+    contract_start = rr["line_start"].dropna().min() if not rr.empty else None
+    year_1_cutoff = (contract_start + pd.DateOffset(years=1)) if contract_start is not None and pd.notna(contract_start) else None
 
     total = 0.0
+
+    # RR lines: prorate to year 1
     for _, line in rr.iterrows():
         line_start = line["line_start"]
         line_end   = line["line_end"]
@@ -152,16 +156,14 @@ def _calc_first_year_acv(opp_lines: pd.DataFrame) -> float:
         if pd.isna(line_start) or pd.isna(line_end):
             continue
 
-        # Skip lines that start in year 2+
-        if line_start >= year_1_cutoff:
+        if year_1_cutoff is not None and line_start >= year_1_cutoff:
             continue
 
         total_days = (line_end - line_start).days
         if total_days <= 0:
             continue
 
-        # Prorate if line extends past year-1 cutoff
-        included_end  = min(line_end, year_1_cutoff)
+        included_end  = min(line_end, year_1_cutoff) if year_1_cutoff is not None else line_end
         included_days = (included_end - line_start).days
         fraction = included_days / total_days
 
@@ -171,23 +173,31 @@ def _calc_first_year_acv(opp_lines: pd.DataFrame) -> float:
 
         total += price * duration * quantity * fraction
 
+    # NR lines: 50% of one-time price × quantity
+    for _, line in nr.iterrows():
+        price    = float(line.get("Price (converted)", 0) or 0)
+        quantity = float(line.get("Quantity", 1) or 1)
+        total += price * quantity * NR_ACV_WEIGHT
+
     return round(total, 2)
 
 
 def _calc_total_rr_acv(opp_lines: pd.DataFrame) -> float:
-    """Return total ACV (EUR) for ALL years of RR lines (no year-1 cutoff).
+    """Return total ACV (EUR) for ALL years of RR lines plus 50% of NR lines.
 
     Used together with _calc_first_year_acv to derive multi-year incremental ACV:
       multi_year_acv = total_rr_acv - first_year_acv
+    NR lines are one-time (no year 2+), so they appear in both and cancel out.
     """
-    rr = opp_lines[
-        opp_lines["Product Code"].astype(str).str.upper().str.startswith("RR")
-    ].copy()
+    codes = opp_lines["Product Code"].astype(str).str.upper()
+    rr = opp_lines[codes.str.startswith("RR")].copy()
+    nr = opp_lines[codes.str.startswith("NR")].copy()
 
-    if rr.empty:
+    if rr.empty and nr.empty:
         return 0.0
 
     total = 0.0
+
     for _, line in rr.iterrows():
         line_start = line["line_start"]
         line_end   = line["line_end"]
@@ -200,6 +210,11 @@ def _calc_total_rr_acv(opp_lines: pd.DataFrame) -> float:
         duration = float(line.get("Duration (years)", 1) or 1)
         quantity = float(line.get("Quantity", 1) or 1)
         total += price * duration * quantity
+
+    for _, line in nr.iterrows():
+        price    = float(line.get("Price (converted)", 0) or 0)
+        quantity = float(line.get("Quantity", 1) or 1)
+        total += price * quantity * NR_ACV_WEIGHT
 
     return round(total, 2)
 

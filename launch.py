@@ -389,12 +389,16 @@ def _make_pdf(emp_id: str, month_str: str) -> str | None:
         summary = {k: (v.strftime("%Y-%m-%d") if isinstance(v, pd.Timestamp) else v)
                    for k, v in summary.items()}
 
-        wk = commission_workings(MODEL, emp_id, month_ts)
+        q = (month_ts.month - 1) // 3 + 1
+        wk = commission_workings(
+            MODEL, emp_id, month_ts,
+            quarter=q if emp["role"] == "ae" else None,
+            year=month_ts.year if emp["role"] == "ae" else None,
+        )
         rows = wk["rows"]
 
         acc = None
         if not MODEL.accelerators.empty:
-            q    = (month_ts.month - 1) // 3 + 1
             a_df = MODEL.accelerators[
                 (MODEL.accelerators["employee_id"] == emp_id) &
                 (MODEL.accelerators["year"] == month_ts.year) &
