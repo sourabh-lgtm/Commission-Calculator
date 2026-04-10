@@ -387,12 +387,12 @@ def employee_list(model) -> list[dict]:
     commissioned = model.employees[
         model.employees["role"].isin(["sdr", "cs", "cs_lead", "ae"])
     ].copy()
-    # AEs: only show those active on or after 2026-01-01 (exclude pre-FY26 leavers)
+    # AEs and SDRs: only show those active on or after 2026-01-01 (exclude pre-FY26 leavers)
     if "plan_end_date" in commissioned.columns:
         fy26_start = pd.Timestamp("2026-01-01")
-        ae_mask = commissioned["role"] == "ae"
-        ae_active = commissioned["plan_end_date"].isna() | (commissioned["plan_end_date"] >= fy26_start)
-        commissioned = commissioned[~ae_mask | ae_active]
+        role_mask = commissioned["role"].isin(["ae", "sdr"])
+        fy26_active = commissioned["plan_end_date"].isna() | (commissioned["plan_end_date"] >= fy26_start)
+        commissioned = commissioned[~role_mask | fy26_active]
     cols = ["employee_id", "name", "title", "role", "region", "currency"]
     if "manager_id" in commissioned.columns:
         cols.append("manager_id")
