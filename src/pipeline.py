@@ -42,7 +42,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.closed_won     = data["closed_won"]
     model.ae_closed_won  = data.get("ae_closed_won", pd.DataFrame())
     model.fx_rates       = data["fx_rates"]
-    model.cs_performance = _load_cs_performance(data_dir, data.get("employees"))
+    model.cs_performance = _load_cs_performance(data_dir, data.get("employees"), model.fx_rates)
     # Inject AE / SDR Lead data into cs_performance so commission plans can access it
     model.cs_performance["ae_closed_won"]    = model.ae_closed_won
     model.cs_performance["ae_targets"]       = data.get("ae_targets", pd.DataFrame())
@@ -614,7 +614,7 @@ def _load_credits(data_dir: str, employees_df: pd.DataFrame | None) -> pd.DataFr
     return result, raw_result, detail_df
 
 
-def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None) -> dict:
+def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None, fx_df: pd.DataFrame | None = None) -> dict:
     """Load CS performance CSVs. Returns empty DataFrames for any missing file.
 
     NRR is computed dynamically from cs_book_of_business.csv + InputData.csv.
@@ -659,11 +659,13 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
     csat_sent   = _load_csat_sent(data_dir, employees_safe)
     csat_scores = _load_csat_scores(data_dir, employees_safe)
     credits, credits_raw, credits_detail = _load_credits(data_dir, employees_safe)
-    referrals   = _read("cs_referrals.csv", parse_dates=["date"])
     nrr_targets = _read("cs_nrr_targets.csv")
 
-    # Add month column to referrals
-    if not referrals.empty and "date" in referrals.columns:
+    # ---- Referrals: loaded from Salesforce DCT report (cs_referrals_report.csv) ----
+    referrals = _parse_sf_referrals_report(
+        data_dir, employees_safe, fx_df if fx_df is not None else pd.DataFrame()
+    )
+    if not referrals.empty:
         referrals["month"] = referrals["date"].dt.to_period("M").dt.to_timestamp()
 
     # ---- Team-lead aggregate CSAT + Credits ----
@@ -750,6 +752,149 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         "referrals":              referrals,
         "cs_lead_multi_year_acv": cs_lead_multi_year_acv,
     }
+
+
+def _parse_sf_referrals_report(
+    data_dir: str,
+    employees_df: pd.DataFrame,
+    fx_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Parse the Salesforce DCT referral report into the referrals DataFrame schema.
+
+    Expected file: data/cs_referrals_report.csv (Salesforce report export).
+    Key columns used:
+      - Company Referrer  : name of the CSA/team lead who made the referral
+      - DCT Discovery     : SAO date (format 'DD/MM/YYYY, HH:MM')
+      - Stage             : 'Closed Won' triggers ACV commission
+      - Amount / Amount Currency : ACV, converted to EUR
+      - Lead Source       : 'Outbound …' → outbound referral_type, else inbound
+
+    A row must have a DCT Discovery date to generate a SAO commission.
+    A row with Stage == 'Closed Won' additionally earns the ACV commission.
+    """
+    path = os.path.join(data_dir, "cs_referrals_report.csv")
+    if not os.path.exists(path):
+        return pd.DataFrame()
+
+    print("[Pipeline] CS referrals: loading Salesforce DCT referral report...")
+    df = pd.read_csv(path, encoding="cp1252")
+    df.columns = df.columns.str.strip()
+
+    # Only process rows that have a DCT Discovery date (these qualify for SAO commission)
+    dct_col = "DCT Discovery"
+    if dct_col not in df.columns:
+        print(f"[Pipeline] CS referrals: '{dct_col}' column missing in cs_referrals_report.csv — skipping.")
+        return pd.DataFrame()
+
+    df = df[df[dct_col].notna() & (df[dct_col].astype(str).str.strip() != "")].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    # Parse DCT Discovery date (Salesforce format: "12/09/2025, 14:20" → day/month/year)
+    df["dct_date"] = pd.to_datetime(
+        df[dct_col].astype(str).str.split(",").str[0].str.strip(),
+        format="%d/%m/%Y",
+        errors="coerce",
+    )
+    df = df[df["dct_date"].notna()].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    # Build name → employee_id lookup across all employees
+    # (AM referrals will be wired up once an AM commission plan is added)
+    all_emps = employees_df.copy() if not employees_df.empty else pd.DataFrame()
+
+    name_to_id: dict[str, str] = {}
+    for _, emp in all_emps.iterrows():
+        eid = str(emp["employee_id"])
+        # Full name (preferred)
+        full = ""
+        if "name" in emp.index and pd.notna(emp["name"]):
+            full = emp["name"].strip()
+        elif "first_name" in emp.index and "last_name" in emp.index:
+            fn = emp["first_name"].strip() if pd.notna(emp.get("first_name")) else ""
+            ln = emp["last_name"].strip()  if pd.notna(emp.get("last_name"))  else ""
+            full = f"{fn} {ln}".strip()
+        if full:
+            name_to_id[full.lower()] = eid
+        # First name only (fallback for partial names in Salesforce)
+        first = ""
+        if "first_name" in emp.index and pd.notna(emp.get("first_name")):
+            first = emp["first_name"].strip()
+        elif full:
+            first = full.split()[0]
+        if first and first.lower() not in name_to_id:
+            name_to_id[first.lower()] = eid
+
+    rows = []
+    for _, r in df.iterrows():
+        referrer = str(r.get("Company Referrer", "")).strip()
+        if not referrer:
+            continue
+
+        # Match referrer name → employee_id
+        emp_id = name_to_id.get(referrer.lower())
+        if emp_id is None:
+            # Try first word of referrer (handles "Delphine" matching "Delphine Froment")
+            first_word = referrer.split()[0].lower()
+            emp_id = name_to_id.get(first_word)
+        if emp_id is None:
+            print(f"[Pipeline] CS referrals: could not match referrer '{referrer}' to any employee — skipping row.")
+            continue
+
+        dct_date = r["dct_date"]
+
+        # Parse Close Date (format DD/MM/YYYY) — used for ACV commission quarter
+        raw_close = str(r.get("Close Date", "")).strip()
+        close_date = pd.to_datetime(raw_close, format="%d/%m/%Y", errors="coerce")
+        if pd.isna(close_date):
+            close_date = None
+
+        currency = str(r.get("Amount Currency", "EUR")).strip() or "EUR"
+        raw_amount = r.get("Amount", 0)
+        amount_local = float(str(raw_amount).replace(",", "")) if pd.notna(raw_amount) else 0.0
+
+        # Convert local currency → EUR using the DCT month's FX rate
+        amount_eur = amount_local
+        if currency != "EUR" and not fx_df.empty:
+            col = f"EUR_{currency}"
+            if col in fx_df.columns:
+                dct_month = dct_date.to_period("M").to_timestamp()
+                fx_row = fx_df[fx_df["month"] == dct_month]
+                if fx_row.empty:
+                    prior = fx_df[fx_df["month"] <= dct_month]
+                    fx_row = prior.iloc[[-1]] if not prior.empty else pd.DataFrame()
+                if not fx_row.empty:
+                    fx_val = float(fx_row[col].iloc[0])
+                    if fx_val > 0:
+                        amount_eur = amount_local / fx_val   # EUR_XXX = local per EUR
+
+        # Referral type from Lead Source
+        lead_source = str(r.get("Lead Source", "")).strip()
+        referral_type = "outbound" if "outbound" in lead_source.lower() else "inbound"
+
+        # Closed-won flag
+        stage = str(r.get("Stage", "")).strip()
+        is_closed_won = stage.lower() == "closed won"
+
+        rows.append({
+            "employee_id":   emp_id,
+            "date":          dct_date,
+            "close_date":    close_date,
+            "account_name":  str(r.get("Account Name", "")).strip(),
+            "referral_type": referral_type,
+            "acv_eur":       round(amount_eur, 2),
+            "is_closed_won": is_closed_won,
+            "is_forecast":   False,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    result = pd.DataFrame(rows)
+    result["employee_id"] = result["employee_id"].astype(str)
+    print(f"[Pipeline] CS referrals: loaded {len(result)} referral rows from Salesforce report ({result['is_closed_won'].sum()} closed-won).")
+    return result
 
 
 def _discover_year_quarters(months: list[pd.Timestamp]) -> list[tuple[int, int]]:

@@ -97,25 +97,47 @@ class CSACommissionPlan(BaseCommissionPlan):
         fx_rate  = get_fx_rate(fx_df, month, currency)
         rates    = self.get_rates(currency)
 
-        # ---- Referral commissions from cs_referrals.csv ----
+        # ---- Referral commissions — paid at quarter-end ----
+        # SAO bonus: quarter of DCT Discovery date
+        # ACV bonus: quarter of Close Date (may differ from SAO quarter)
         referral_sao_count = 0
         referral_sao_comm  = 0.0
         referral_cw_comm   = 0.0
 
-        if cs_performance:
+        if month.month in (3, 6, 9, 12) and cs_performance:
             ref_df = cs_performance.get("referrals", pd.DataFrame())
             if not ref_df.empty:
-                emp_ref = ref_df[
+                quarter = (month.month - 1) // 3 + 1
+                q_start = pd.Timestamp(year=month.year, month=(quarter - 1) * 3 + 1, day=1)
+
+                # SAO: referrals whose DCT month falls in this quarter
+                sao_rows = ref_df[
                     (ref_df["employee_id"] == emp_id) &
-                    (ref_df["month"] == month)
+                    (ref_df["month"] >= q_start) &
+                    (ref_df["month"] <= month)
                 ]
-                for _, r in emp_ref.iterrows():
+                for _, r in sao_rows.iterrows():
                     rtype    = str(r.get("referral_type", "")).lower()
                     rate_key = "outbound" if rtype == "outbound" else "inbound"
                     referral_sao_count += 1
                     referral_sao_comm  += rates[rate_key]
-                    if r.get("is_closed_won", False) and not r.get("is_forecast", True):
-                        acv_eur = float(r.get("acv_eur", 0))
+
+                # ACV: closed-won referrals whose close_date falls in this quarter
+                cw_candidates = ref_df[
+                    (ref_df["employee_id"] == emp_id) &
+                    ref_df.get("is_closed_won", pd.Series(False, index=ref_df.index))
+                ] if "is_closed_won" in ref_df.columns else pd.DataFrame()
+                for _, r in cw_candidates.iterrows():
+                    if r.get("is_forecast", False):
+                        continue
+                    cd = r.get("close_date")
+                    if pd.isna(cd) or cd is None:
+                        continue
+                    close_month = pd.Timestamp(cd).to_period("M").to_timestamp()
+                    if q_start <= close_month <= month:
+                        rtype    = str(r.get("referral_type", "")).lower()
+                        rate_key = "outbound" if rtype == "outbound" else "inbound"
+                        acv_eur  = float(r.get("acv_eur", 0))
                         referral_cw_comm += acv_eur * REFERRAL_CW_RATES[rate_key] * fx_rate
 
         # ---- Quarterly bonus — only at quarter-end months (Mar/Jun/Sep/Dec) ----
@@ -511,27 +533,53 @@ class CSACommissionPlan(BaseCommissionPlan):
         return rows
 
     def _referral_section_rows(self, emp_id, month, currency, fx_rate, rates, cs_performance):
-        """Returns section header + referral rows, or [] if no referrals this month."""
-        if not cs_performance:
+        """Returns section header + referral detail rows, or [] if not a quarter-end or no activity.
+
+        SAO rows: referrals whose DCT month falls in this quarter.
+        CW rows:  closed-won referrals whose close_date falls in this quarter.
+        """
+        if month.month not in (3, 6, 9, 12) or not cs_performance:
             return []
         ref_df = cs_performance.get("referrals", pd.DataFrame())
         if ref_df.empty:
             return []
-        emp_ref = ref_df[
+        quarter = (month.month - 1) // 3 + 1
+        q_start = pd.Timestamp(year=month.year, month=(quarter - 1) * 3 + 1, day=1)
+
+        # SAO rows: DCT month in this quarter
+        sao_df = ref_df[
             (ref_df["employee_id"] == emp_id) &
-            (ref_df["month"] == month)
+            (ref_df["month"] >= q_start) &
+            (ref_df["month"] <= month)
         ]
-        if emp_ref.empty:
+
+        # CW rows: close_date month in this quarter (closed-won only)
+        cw_rows_list = []
+        if "is_closed_won" in ref_df.columns and "close_date" in ref_df.columns:
+            cw_candidates = ref_df[
+                (ref_df["employee_id"] == emp_id) &
+                (ref_df["is_closed_won"] == True)
+            ]
+            for _, r in cw_candidates.iterrows():
+                cd = r.get("close_date")
+                if pd.isna(cd) or cd is None:
+                    continue
+                close_month = pd.Timestamp(cd).to_period("M").to_timestamp()
+                if q_start <= close_month <= month:
+                    cw_rows_list.append(r)
+
+        if sao_df.empty and not cw_rows_list:
             return []
 
         rows = [self._section_row("Referrals", currency)]
-        for _, r in emp_ref.iterrows():
+
+        # Emit SAO rows
+        for _, r in sao_df.iterrows():
             rtype    = str(r.get("referral_type", "")).lower()
             rate_key = "outbound" if rtype == "outbound" else "inbound"
             sao_rate = rates[rate_key]
             date_str = r["date"].strftime("%Y-%m-%d") if hasattr(r.get("date"), "strftime") else str(r.get("date", ""))
             account  = str(r.get("account_name", ""))
-
             rows.append({
                 "type":             "CS Referral SAO",
                 "date":             date_str,
@@ -547,25 +595,31 @@ class CSACommissionPlan(BaseCommissionPlan):
                 "is_forecast":      False,
             })
 
-            if r.get("is_closed_won", False):
-                acv_eur     = float(r.get("acv_eur", 0))
-                cw_pct      = REFERRAL_CW_RATES[rate_key]
-                is_forecast = bool(r.get("is_forecast", False))
-                comm        = round(acv_eur * cw_pct * fx_rate, 2) if not is_forecast else 0.0
-                rows.append({
-                    "type":             "Forecast Referral CW" if is_forecast else "Referral CW",
-                    "date":             date_str,
-                    "opportunity_id":   account,
-                    "opportunity_name": account,
-                    "document_number":  "",
-                    "sao_type":         rtype,
-                    "acv_eur":          acv_eur,
-                    "fx_rate":          fx_rate,
-                    "rate_desc":        f"{cw_pct*100:.0f}% of ACV \u00d7 {fx_rate:.4f}" + (" (forecast)" if is_forecast else ""),
-                    "commission":       comm,
-                    "currency":         currency,
-                    "is_forecast":      is_forecast,
-                })
+        # Emit CW rows (keyed by close_date)
+        for r in cw_rows_list:
+            rtype       = str(r.get("referral_type", "")).lower()
+            rate_key    = "outbound" if rtype == "outbound" else "inbound"
+            acv_eur     = float(r.get("acv_eur", 0))
+            cw_pct      = REFERRAL_CW_RATES[rate_key]
+            is_forecast = bool(r.get("is_forecast", False))
+            comm        = round(acv_eur * cw_pct * fx_rate, 2) if not is_forecast else 0.0
+            cd          = r.get("close_date")
+            close_str   = pd.Timestamp(cd).strftime("%Y-%m-%d") if cd and not pd.isna(cd) else ""
+            account     = str(r.get("account_name", ""))
+            rows.append({
+                "type":             "Forecast Referral CW" if is_forecast else "Referral CW",
+                "date":             close_str,
+                "opportunity_id":   account,
+                "opportunity_name": account,
+                "document_number":  "",
+                "sao_type":         rtype,
+                "acv_eur":          acv_eur,
+                "fx_rate":          fx_rate,
+                "rate_desc":        f"{cw_pct*100:.0f}% of ACV \u00d7 {fx_rate:.4f}" + (" (forecast)" if is_forecast else ""),
+                "commission":       comm,
+                "currency":         currency,
+                "is_forecast":      is_forecast,
+            })
 
         return rows
 

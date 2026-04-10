@@ -83,25 +83,47 @@ class CSLeadCommissionPlan(CSACommissionPlan):
         fx_rate  = get_fx_rate(fx_df, month, currency)
         rates    = self.get_rates(currency)
 
-        # ---- Referral commissions (same logic as CSA) ----
+        # ---- Referral commissions — paid at quarter-end ----
+        # SAO bonus: quarter of DCT Discovery date
+        # ACV bonus: quarter of Close Date (may differ from SAO quarter)
         referral_sao_count = 0
         referral_sao_comm  = 0.0
         referral_cw_comm   = 0.0
 
-        if cs_performance:
+        if month.month in (3, 6, 9, 12) and cs_performance:
             ref_df = cs_performance.get("referrals", pd.DataFrame())
             if not ref_df.empty:
-                emp_ref = ref_df[
+                quarter = (month.month - 1) // 3 + 1
+                q_start = pd.Timestamp(year=month.year, month=(quarter - 1) * 3 + 1, day=1)
+
+                # SAO: referrals whose DCT month falls in this quarter
+                sao_rows = ref_df[
                     (ref_df["employee_id"] == emp_id) &
-                    (ref_df["month"] == month)
+                    (ref_df["month"] >= q_start) &
+                    (ref_df["month"] <= month)
                 ]
-                for _, r in emp_ref.iterrows():
+                for _, r in sao_rows.iterrows():
                     rtype    = str(r.get("referral_type", "")).lower()
                     rate_key = "outbound" if rtype == "outbound" else "inbound"
                     referral_sao_count += 1
                     referral_sao_comm  += rates[rate_key]
-                    if r.get("is_closed_won", False) and not r.get("is_forecast", True):
-                        acv_eur = float(r.get("acv_eur", 0))
+
+                # ACV: closed-won referrals whose close_date falls in this quarter
+                cw_candidates = ref_df[
+                    (ref_df["employee_id"] == emp_id) &
+                    ref_df.get("is_closed_won", pd.Series(False, index=ref_df.index))
+                ] if "is_closed_won" in ref_df.columns else pd.DataFrame()
+                for _, r in cw_candidates.iterrows():
+                    if r.get("is_forecast", False):
+                        continue
+                    cd = r.get("close_date")
+                    if pd.isna(cd) or cd is None:
+                        continue
+                    close_month = pd.Timestamp(cd).to_period("M").to_timestamp()
+                    if q_start <= close_month <= month:
+                        rtype    = str(r.get("referral_type", "")).lower()
+                        rate_key = "outbound" if rtype == "outbound" else "inbound"
+                        acv_eur  = float(r.get("acv_eur", 0))
                         referral_cw_comm += acv_eur * REFERRAL_CW_RATES[rate_key] * fx_rate
 
         # ---- Multi-year ACV commission (1% of year-2+ ACV on renewals) ----
