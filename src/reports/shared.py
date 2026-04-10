@@ -36,7 +36,7 @@ def commission_workings(
 
     plan = plan_cls()
     cs_perf = getattr(model, "cs_performance", None)
-    if emp["role"] in ("cs", "cs_lead") and cs_perf:
+    if emp["role"] in ("cs", "cs_lead", "cs_director") and cs_perf:
         rows = plan.get_workings_rows(
             emp, month,
             model.sdr_activities,
@@ -144,7 +144,7 @@ def payroll_summary(model, year: int) -> dict:
     def _q(m): return (m.month - 1) // 3 + 1
 
     commissioned = model.employees[
-        model.employees["role"].isin(["sdr", "cs", "cs_lead", "ae"])
+        model.employees["role"].isin(["sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae"])
     ].copy()
     regions: dict[str, list] = {}
 
@@ -197,8 +197,8 @@ def accrual_summary(model, year: int) -> dict:
 
     regions: dict[str, list] = {}
 
-    # ---- SDR employees: accrual = actual commission ----
-    sdrs = model.employees[model.employees["role"] == "sdr"].copy()
+    # ---- SDR / SDR Lead employees: accrual = actual commission ----
+    sdrs = model.employees[model.employees["role"].isin(["sdr", "sdr_lead"])].copy()
     for _, emp in sdrs.iterrows():
         emp_id   = emp["employee_id"]
         region   = emp["region"]
@@ -250,13 +250,13 @@ def accrual_summary(model, year: int) -> dict:
                 "total":   round(total * 0.31, 2),
             })
 
-    # ---- CS / CS Lead employees: accrual = full potential (salary x 15% or 20%) ----
-    cs_employees = model.employees[model.employees["role"].isin(["cs", "cs_lead"])].copy()
+    # ---- CS / CS Lead / CS Director employees: accrual = full potential (salary x 15% or 20%) ----
+    cs_employees = model.employees[model.employees["role"].isin(["cs", "cs_lead", "cs_director"])].copy()
     for _, emp in cs_employees.iterrows():
         emp_id    = emp["employee_id"]
         region    = emp["region"]
         currency  = emp["currency"]
-        bonus_pct = 0.20 if emp["role"] == "cs_lead" else 0.15
+        bonus_pct = 0.20 if emp["role"] in ("cs_lead", "cs_director") else 0.15
         sal_hist  = model.salary_history[model.salary_history["employee_id"] == emp_id]
 
         monthly = {}
@@ -286,8 +286,8 @@ def accrual_summary(model, year: int) -> dict:
             "total":            total,
         }
         accrual_label = (
-            f"CS Lead Bonus Accrual (full potential, 20%)"
-            if emp["role"] == "cs_lead"
+            "CS Director Bonus Accrual (full potential, 20%)" if emp["role"] == "cs_director"
+            else "CS Lead Bonus Accrual (full potential, 20%)" if emp["role"] == "cs_lead"
             else "CS Bonus Accrual (full potential)"
         )
         regions.setdefault(region, []).append({**base, "type": accrual_label})

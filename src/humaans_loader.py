@@ -377,6 +377,18 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         columns=["employee_id","effective_date","end_date","salary_monthly","salary_currency","title_at_time","role_at_time"]
     )
 
+    # Remove employees who left before FY26 (employment ended in 2025 or earlier)
+    fy26_start = pd.Timestamp("2026-01-01")
+    if not employees_df.empty and "plan_end_date" in employees_df.columns:
+        left_before_fy26 = (
+            employees_df["plan_end_date"].notna() &
+            (employees_df["plan_end_date"] < fy26_start)
+        )
+        n_removed = int(left_before_fy26.sum())
+        if n_removed:
+            print(f"[Humaans] Removed {n_removed} employees who left before FY26 (employment end before 2026-01-01)")
+            employees_df = employees_df[~left_before_fy26].copy()
+
     _log_summary(employees_df)
     return employees_df, salary_history_df
 

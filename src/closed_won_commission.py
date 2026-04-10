@@ -297,6 +297,13 @@ def build_closed_won_commission(
         opps["Close Date"].astype(str).str.strip(), format="%d/%m/%Y", errors="coerce"
     )
     opps = opps.dropna(subset=["close_date"])
+
+    # Exclude deals closed in 2025 or before — tracked separately
+    opps = opps[opps["close_date"].dt.year >= 2026].copy()
+    if opps.empty:
+        print("[CW] No 2026+ Closed Won deals found")
+        return _empty_df()
+
     opps["invoicing_cadence"] = opps["Invoicing Cadence"].astype(str) if has_cadence else "yearly in advance"
 
     opps["sao_type"] = opps["Lead Source"].apply(_classify_lead_source)

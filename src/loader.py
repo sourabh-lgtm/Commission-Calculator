@@ -35,6 +35,14 @@ def load_employees(data_dir: str) -> pd.DataFrame:
     df["plan_end_date"]   = pd.to_datetime(df["plan_end_date"],   errors="coerce")
     df["manager_id"] = df["manager_id"].fillna("")
     df["email"]      = df["email"].fillna("")
+
+    # Remove employees who left before FY26 (plan_end_date set to their last day)
+    fy26_start = pd.Timestamp("2026-01-01")
+    left_before_fy26 = df["plan_end_date"].notna() & (df["plan_end_date"] < fy26_start)
+    if left_before_fy26.any():
+        print(f"[Loader] Removed {left_before_fy26.sum()} employees who left before FY26 (plan_end_date < 2026-01-01)")
+        df = df[~left_before_fy26].copy()
+
     return df
 
 

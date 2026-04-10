@@ -11,7 +11,7 @@ def cs_overview(model, month: pd.Timestamp) -> dict:
     if model.commission_detail.empty:
         return {"employees": [], "kpis": {"total_bonus_eur": 0, "avg_nrr_pct": 0, "avg_csat_pct": 0, "num_active": 0}}
 
-    cs_ids = set(model.employees[model.employees["role"].isin(["cs", "cs_lead"])]["employee_id"])
+    cs_ids = set(model.employees[model.employees["role"].isin(["cs", "cs_lead", "cs_director"])]["employee_id"])
     df = model.commission_detail[
         (model.commission_detail["month"] == month) &
         model.commission_detail["employee_id"].isin(cs_ids)
@@ -69,7 +69,7 @@ def cs_quarterly(model, year: int, quarter: int) -> dict:
     if model.commission_detail.empty:
         return {"employees": [], "year": year, "quarter": quarter}
 
-    cs_ids = set(model.employees[model.employees["role"].isin(["cs", "cs_lead"])]["employee_id"])
+    cs_ids = set(model.employees[model.employees["role"].isin(["cs", "cs_lead", "cs_director"])]["employee_id"])
     df = model.commission_detail[
         model.commission_detail["month"].isin(months) &
         model.commission_detail["employee_id"].isin(cs_ids)
