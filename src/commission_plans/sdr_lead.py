@@ -228,6 +228,10 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
             # Only count actual invoices (not forecast) to avoid double-counting
             if "is_forecast" in team_cw.columns:
                 team_cw = team_cw[~team_cw["is_forecast"]]
+            # Deduplicate: sum invoice shares per opportunity so split-billed
+            # deals don't inflate ACV
+            if not team_cw.empty and "opportunity_id" in team_cw.columns:
+                team_cw = team_cw.groupby("opportunity_id", as_index=False)["acv_eur"].sum()
             q_acv_eur = float(team_cw["acv_eur"].sum())
 
         acv_attainment = q_acv_eur / acv_target_eur_q if acv_target_eur_q > 0 else 0.0
@@ -351,8 +355,15 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
             ]
             if "is_forecast" in team_cw.columns:
                 team_cw = team_cw[~team_cw["is_forecast"]]
-            sort_col = "close_date" if "close_date" in team_cw.columns else "month"
-            team_cw  = team_cw.sort_values(sort_col, na_position="last")
+            # Deduplicate: deals with multiple invoices → one row per opportunity
+            if not team_cw.empty and "opportunity_id" in team_cw.columns:
+                agg_cols = {c: "first" for c in team_cw.columns if c != "acv_eur"}
+                agg_cols["acv_eur"] = "sum"
+                team_cw = (
+                    team_cw.groupby("opportunity_id", as_index=False)
+                    .agg(agg_cols)
+                    .sort_values("close_date", na_position="last")
+                )
             q_acv_eur = float(team_cw["acv_eur"].sum())
 
         acv_attainment = q_acv_eur / acv_target_eur_q if acv_target_eur_q > 0 else 0.0

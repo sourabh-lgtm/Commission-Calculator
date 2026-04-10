@@ -25,4 +25,4 @@ pip install -r requirements.txt --quiet
 
 echo.
 echo Launching Commission Calculator at http://localhost:8050
-python launch.py %*
+python dev.py %*
