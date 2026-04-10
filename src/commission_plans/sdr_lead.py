@@ -317,27 +317,38 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
         employees_df = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
         managed_ids = _get_managed_sdr_ids(str(emp_id), employees_df, months[0], q_end)
 
-        # Team SAO count (only managed SDRs)
-        q_sao_count = 0
-        if not activities.empty and "month" in activities.columns:
-            team_saos = activities[activities["month"].isin(months)]
-            if managed_ids and "employee_id" in team_saos.columns:
-                team_saos = team_saos[team_saos["employee_id"].astype(str).isin(managed_ids)]
-            q_sao_count = len(team_saos)
+        # Employee ID → name lookup for detail rows
+        emp_name_map: dict[str, str] = {}
+        if not employees_df.empty and "name" in employees_df.columns:
+            for _, er in employees_df.drop_duplicates(subset=["employee_id"]).iterrows():
+                emp_name_map[str(er["employee_id"])] = str(er["name"])
+
+        # ---- Team SAO detail ----
+        team_saos = pd.DataFrame()
+        if not activities.empty and "month" in activities.columns and "employee_id" in activities.columns:
+            team_saos = activities[
+                activities["month"].isin(months)
+                & activities["employee_id"].astype(str).isin(managed_ids)
+            ].sort_values("date", na_position="last")
+        q_sao_count = len(team_saos)
 
         sao_attainment = q_sao_count / sao_target_q if sao_target_q > 0 else 0.0
         sao_payout_pct = _tiered_payout(sao_attainment)
         sao_bonus      = round(quarterly_bonus_gbp * MEASURE_WEIGHTS["sao"] * sao_payout_pct, 2)
 
-        # Team ACV (only managed SDRs)
+        # ---- Team ACV (closed-won) detail ----
+        team_cw = pd.DataFrame()
         q_acv_eur = 0.0
         sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
-        if not sdr_cw.empty and "month" in sdr_cw.columns:
-            team_cw = sdr_cw[sdr_cw["month"].isin(months)]
-            if managed_ids and "employee_id" in team_cw.columns:
-                team_cw = team_cw[team_cw["employee_id"].astype(str).isin(managed_ids)]
+        if not sdr_cw.empty and "month" in sdr_cw.columns and "employee_id" in sdr_cw.columns:
+            team_cw = sdr_cw[
+                sdr_cw["month"].isin(months)
+                & sdr_cw["employee_id"].astype(str).isin(managed_ids)
+            ]
             if "is_forecast" in team_cw.columns:
                 team_cw = team_cw[~team_cw["is_forecast"]]
+            sort_col = "invoice_date" if "invoice_date" in team_cw.columns else "month"
+            team_cw  = team_cw.sort_values(sort_col, na_position="last")
             q_acv_eur = float(team_cw["acv_eur"].sum())
 
         acv_attainment = q_acv_eur / acv_target_eur_q if acv_target_eur_q > 0 else 0.0
@@ -345,25 +356,62 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
         acv_bonus      = round(quarterly_bonus_gbp * MEASURE_WEIGHTS["acv"] * acv_payout_pct, 2)
 
         date_str = q_end.strftime("%Y-%m-%d")
-        return [
-            {
-                "type":             "Team SAO",
-                "date":             date_str,
-                "opportunity_name": f"Team SAOs: {q_sao_count} / {sao_target_q}  ({sao_attainment * 100:.0f}% attainment)",
-                "sao_type":         "",
+        rows: list[dict] = []
+
+        # Individual SAO rows
+        for _, act in team_saos.iterrows():
+            sdr_name = emp_name_map.get(str(act["employee_id"]), str(act["employee_id"]))
+            act_date = act.get("date")
+            rows.append({
+                "type":             "SAO",
+                "date":             act_date.strftime("%Y-%m-%d") if pd.notna(act_date) else "",
+                "opportunity_name": str(act.get("account_name", "")).strip(),
+                "sao_type":         str(act.get("sao_type", "")).strip(),
                 "acv_eur":          None,
-                "fx_rate":          fx_rate,
-                "rate_desc":        f"35% weight — {sao_payout_pct * 100:.0f}% tier payout",
-                "commission":       sao_bonus,
-            },
-            {
-                "type":             "Team ACV",
-                "date":             date_str,
-                "opportunity_name": f"Team ACV: \u20ac{q_acv_eur:,.0f} / \u20ac{acv_target_eur_q:,.0f}  ({acv_attainment * 100:.0f}% attainment)",
-                "sao_type":         "",
-                "acv_eur":          round(q_acv_eur, 2),
-                "fx_rate":          fx_rate,
-                "rate_desc":        f"65% weight — {acv_payout_pct * 100:.0f}% tier payout",
-                "commission":       acv_bonus,
-            },
-        ]
+                "fx_rate":          None,
+                "rate_desc":        sdr_name,
+                "commission":       None,
+            })
+
+        # SAO summary row
+        rows.append({
+            "type":             "Team SAOs",
+            "date":             date_str,
+            "opportunity_name": f"{q_sao_count} / {sao_target_q}  ({sao_attainment * 100:.0f}% attainment)",
+            "sao_type":         "",
+            "acv_eur":          None,
+            "fx_rate":          fx_rate,
+            "rate_desc":        f"35% weight \u2014 {sao_payout_pct * 100:.0f}% tier payout",
+            "commission":       sao_bonus,
+        })
+
+        # Individual ACV rows
+        for _, cw in team_cw.iterrows():
+            sdr_name = emp_name_map.get(str(cw["employee_id"]), str(cw["employee_id"]))
+            inv_date = cw.get("invoice_date") if pd.notna(cw.get("invoice_date", pd.NaT)) else cw.get("month")
+            opp_name = str(cw.get("opportunity_name") or cw.get("opportunity_id") or "").strip()
+            acv_val  = float(cw.get("acv_eur", 0) or 0)
+            rows.append({
+                "type":             "Closed Won",
+                "date":             inv_date.strftime("%Y-%m-%d") if pd.notna(inv_date) else "",
+                "opportunity_name": opp_name,
+                "sao_type":         str(cw.get("sao_type", "")).strip(),
+                "acv_eur":          acv_val if acv_val > 0 else None,
+                "fx_rate":          None,
+                "rate_desc":        sdr_name,
+                "commission":       None,
+            })
+
+        # ACV summary row
+        rows.append({
+            "type":             "Team ACV",
+            "date":             date_str,
+            "opportunity_name": f"\u20ac{q_acv_eur:,.0f} / \u20ac{acv_target_eur_q:,.0f}  ({acv_attainment * 100:.0f}% attainment)",
+            "sao_type":         "",
+            "acv_eur":          round(q_acv_eur, 2),
+            "fx_rate":          fx_rate,
+            "rate_desc":        f"65% weight \u2014 {acv_payout_pct * 100:.0f}% tier payout",
+            "commission":       acv_bonus,
+        })
+
+        return rows

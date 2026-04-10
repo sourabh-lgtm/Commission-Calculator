@@ -357,25 +357,32 @@ async function loadWorkings() {
     kpiCard('Accelerator', fmtAmt(summary.accelerator_topup||0,cur), 'Quarterly top-up') +
     (spifAmt > 0 ? kpiCard('SPIF', fmtAmt(spifAmt, cur), 'Included in total') : '');
 
-  const heads = ['Date','Type','Opportunity','SAO Type','ACV (EUR)','FX','Rate','Commission'];
+  const heads = ['Date','Type','Opportunity','SAO Type','ACV (EUR)','FX','Rate / SDR','Commission'];
   const rowData = rows.map(r => {
-    const isForecast = r.is_forecast;
-    const isSpif = r.type === 'SPIF';
-    const commStr = r.commission !== null
+    const isForecast   = r.is_forecast;
+    const isSpif       = r.type === 'SPIF';
+    const isSummary    = r.type === 'Team SAOs' || r.type === 'Team ACV';
+    const commStr = r.commission !== null && r.commission !== undefined
       ? (isForecast
           ? '<span style="color:var(--dim)">' + fmtAmt(r.commission, cur) + ' (fcst)</span>'
           : isSpif
             ? '<strong style="color:var(--purple)">' + fmtAmt(r.commission, cur) + '</strong>'
             : '<strong>' + fmtAmt(r.commission, cur) + '</strong>')
       : '\u2014';
-    const typeLabel = isSpif ? '<span style="color:var(--purple);font-weight:700">' + r.type + '</span>' : r.type;
+    const typeLabel = isSpif
+      ? '<span style="color:var(--purple);font-weight:700">' + r.type + '</span>'
+      : isSummary
+        ? '<strong>' + r.type + '</strong>'
+        : r.type;
+    const oppLabel = isSummary
+      ? '<strong>' + (r.opportunity_name || '') + '</strong>'
+      : (r.opportunity_name || r.opportunity_id || '');
     return [
-      r.date, typeLabel,
-      r.opportunity_name || r.opportunity_id || '',
+      r.date, typeLabel, oppLabel,
       r.sao_type ? r.sao_type.charAt(0).toUpperCase()+r.sao_type.slice(1) : '',
-      r.acv_eur ? fmtAmt(r.acv_eur,'EUR') : '\u2014',
+      r.acv_eur != null ? fmtAmt(r.acv_eur,'EUR') : '\u2014',
       r.fx_rate ? r.fx_rate.toFixed(4) : '\u2014',
-      typeLabel, isSpif ? '' : r.rate_desc, commStr
+      isSpif ? '' : r.rate_desc, commStr
     ];
   });
   renderTable('wk-table', heads, rowData);
