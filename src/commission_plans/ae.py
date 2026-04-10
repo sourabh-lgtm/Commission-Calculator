@@ -235,13 +235,11 @@ class AECommissionPlan(BaseCommissionPlan):
             return pd.Timestamp(d).to_period("M").to_timestamp() in qm
 
         # --- Deals for this quarter (by close_date) ---
-        # Deduplicate by opportunity_id so multi-invoice deals count once.
-        # Use opportunity_acv_eur (full deal 1st-year ACV from InputData) when available;
-        # fall back to summing acv_eur per invoice row.
         q_data = ae_cw[
             (ae_cw["employee_id"] == emp_id) &
             ae_cw["close_date"].apply(lambda d: _in_months(d, months))
         ]
+        # Full deal ACV (deduplicated) — used for gate check and attainment display only.
         q_deals = q_data.drop_duplicates("opportunity_id")
 
         if "opportunity_acv_eur" in q_deals.columns:
@@ -252,15 +250,22 @@ class AECommissionPlan(BaseCommissionPlan):
         if "opportunity_multi_year_acv_eur" in q_deals.columns:
             q_acv_my = float(q_deals["opportunity_multi_year_acv_eur"].sum())
         elif "multi_year_acv_eur" in q_data.columns:
-            # First row per opportunity has the full multi-year ACV
             q_acv_my = float(q_data.drop_duplicates("opportunity_id")["multi_year_acv_eur"].sum())
         else:
             q_acv_my = 0.0
 
-        # --- 50% gate for this quarter ---
+        # --- 50% gate (on full committed deal ACV) ---
         gate_met = q_acv_fy >= q_target_eur * QUARTERLY_GATE if q_target_eur > 0 else False
-        qualifying_acv_fy = q_acv_fy if gate_met else 0.0
-        qualifying_acv_my = q_acv_my if gate_met else 0.0
+
+        # Commission is earned only on confirmed (invoiced) rows.
+        # Forecast rows count toward attainment display but not toward this quarter's payout.
+        if "is_forecast" in q_data.columns:
+            q_confirmed = q_data[~q_data["is_forecast"]]
+        else:
+            q_confirmed = q_data  # no is_forecast column → treat all as confirmed
+
+        qualifying_acv_fy = float(q_confirmed["acv_eur"].sum())          if gate_met and not q_confirmed.empty else 0.0
+        qualifying_acv_my = float(q_confirmed["multi_year_acv_eur"].sum()) if gate_met and not q_confirmed.empty else 0.0
 
         # --- Ramp plan evaluation (Q1 only for ramp AEs) ---
         # Criteria from ae_ramp_report.csv: pipeline ≥ 200k, self-gen ≥ 50%, solution design ≥ 7
@@ -419,13 +424,16 @@ class AECommissionPlan(BaseCommissionPlan):
                     return False
                 return pd.Timestamp(d).to_period("M").to_timestamp() in qm
 
+            # Show all rows (confirmed + forecast) so each invoice slot is visible.
+            # Confirmed rows appear first within each deal (is_forecast=False sorts before True).
+            sort_cols = (["close_date", "is_forecast"]
+                         if "is_forecast" in ae_cw.columns else ["close_date"])
             emp_deals = (
                 ae_cw[
                     (ae_cw["employee_id"] == emp_id) &
                     ae_cw["close_date"].apply(_in_qm)
                 ]
-                .drop_duplicates("opportunity_id")   # one row per deal
-                .sort_values("close_date")
+                .sort_values(sort_cols)
             )
             date_col = "close_date"
         else:
@@ -438,9 +446,10 @@ class AECommissionPlan(BaseCommissionPlan):
 
         for _, r in emp_deals.iterrows():
             is_forecast = bool(r.get("is_forecast", False))
-            # Use full deal ACV (opportunity_acv_eur) if available; fall back to row ACV
-            acv_fy  = float(r.get("opportunity_acv_eur") or r["acv_eur"])
-            acv_my  = float(r.get("opportunity_multi_year_acv_eur") or r.get("multi_year_acv_eur", 0.0))
+            # Use the per-row (invoice-split) ACV so confirmed and forecast rows
+            # each show their own share, and their commissions sum to the full deal total.
+            acv_fy  = float(r["acv_eur"])
+            acv_my  = float(r.get("multi_year_acv_eur", 0.0))
 
             raw_date = r.get(date_col)
             if raw_date is None and date_col == "close_date":

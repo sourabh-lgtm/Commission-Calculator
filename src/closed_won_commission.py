@@ -675,78 +675,125 @@ def build_ae_closed_won_commission(
     matched_opp_ids: set[str] = set(inv["External ID"].unique()) if not inv.empty else set()
 
     # ------------------------------------------------------------------
-    # 6a. MATCHED deals: proportional split by invoice amount
+    # 6a. MATCHED deals: fixed ACV split per invoice + forecast for remaining.
+    #
+    # Each positive invoice carries deal_acv / n (one nth per cadence slot).
+    # Credit memos create a clawback row of -deal_acv / n.
+    # Any remaining cadence slots (n - confirmed count) become forecast rows,
+    # timed using the same quarter-end + offset logic as the unmatched path.
     # ------------------------------------------------------------------
     if not inv.empty:
         inv_merged = inv.merge(
             opps[["opportunity_id", "opportunity_name", "employee_id",
-                  "acv_eur", "multi_year_acv_eur", "close_date", "invoicing_cadence"]],
+                  "acv_eur", "multi_year_acv_eur", "close_date",
+                  "invoicing_cadence", "contract_start"]],
             left_on="External ID",
             right_on="opportunity_id",
             how="inner",
         )
 
-        inv_totals = (
-            inv_merged.groupby("opportunity_id")["amount_raw"]
-            .sum()
-            .rename("total_invoiced")
-        )
-        inv_merged = inv_merged.join(inv_totals, on="opportunity_id")
+        for opp_id_m, opp_grp in inv_merged.groupby("opportunity_id"):
+            first_row   = opp_grp.iloc[0]
+            deal_acv_fy = float(first_row["acv_eur"])
+            deal_acv_my = float(first_row["multi_year_acv_eur"])
+            close_dt    = first_row["close_date"]
+            cadence     = str(first_row.get("invoicing_cadence", "") or "yearly in advance")
+            contract_start_raw = first_row.get("contract_start")
+            emp_id_m    = first_row["employee_id"]
+            opp_name_m  = first_row.get("opportunity_name", opp_id_m)
 
-        # First invoice date per opportunity — multi-year ACV booked here in full
-        first_inv_period = inv_merged.groupby("opportunity_id")["Period_ts"].min()
+            n              = _cadence_n_invoices(cadence)
+            acv_per        = round(deal_acv_fy / n, 2)
+            months_between = 12 // n
 
-        for _, r in inv_merged.iterrows():
-            period_ts  = r["Period_ts"]
-            invoice_dt = r["Date_ts"] if pd.notna(r["Date_ts"]) else period_ts
-            if pd.isna(period_ts):
-                period_ts = invoice_dt
-            if pd.isna(period_ts):
-                continue
+            pos_rows    = opp_grp[opp_grp["amount_raw"] > 0].sort_values("Period_ts")
+            credit_rows = opp_grp[opp_grp["amount_raw"] < 0]
 
-            inv_currency   = r["currency"]
-            amount_local   = r["amount_raw"]
-            total_invoiced = r.get("total_invoiced", amount_local) or amount_local
+            # Confirmed rows — one per positive invoice
+            first_invoice = True
+            for _, r in pos_rows.iterrows():
+                period_ts  = r["Period_ts"]
+                invoice_dt = r["Date_ts"] if pd.notna(r["Date_ts"]) else period_ts
+                if pd.isna(period_ts):
+                    period_ts = invoice_dt
+                if pd.isna(period_ts):
+                    continue
+                rows.append({
+                    "employee_id":                    emp_id_m,
+                    "opportunity_id":                 opp_id_m,
+                    "opportunity_name":               opp_name_m,
+                    "acv_eur":                        acv_per,
+                    "multi_year_acv_eur":             round(deal_acv_my, 2) if first_invoice else 0.0,
+                    "opportunity_acv_eur":            round(deal_acv_fy, 2),
+                    "opportunity_multi_year_acv_eur": round(deal_acv_my, 2),
+                    "invoice_date":                   invoice_dt,
+                    "month":                          period_ts.to_period("M").to_timestamp(),
+                    "close_date":                     close_dt,
+                    "is_forecast":                    False,
+                    "document_number":                str(r.get("Document Number", "")).strip(),
+                    "invoice_currency":               str(r["currency"]),
+                    "invoicing_cadence":              cadence,
+                })
+                first_invoice = False
 
-            fx_month = period_ts.to_period("M").to_timestamp()
-            if inv_currency != "EUR":
-                fx_rate = _get_fx_to_eur(fx_rates, fx_month, inv_currency)
-                amount_eur_inv = amount_local / fx_rate if fx_rate != 0 else amount_local
-                total_eur_inv  = total_invoiced / fx_rate if fx_rate != 0 else total_invoiced
-            else:
-                amount_eur_inv = amount_local
-                total_eur_inv  = total_invoiced
+            # Clawback rows — one per credit memo
+            for _, r in credit_rows.iterrows():
+                period_ts  = r["Period_ts"]
+                invoice_dt = r["Date_ts"] if pd.notna(r["Date_ts"]) else period_ts
+                if pd.isna(period_ts):
+                    period_ts = invoice_dt
+                if pd.isna(period_ts):
+                    continue
+                rows.append({
+                    "employee_id":                    emp_id_m,
+                    "opportunity_id":                 opp_id_m,
+                    "opportunity_name":               opp_name_m,
+                    "acv_eur":                        -acv_per,
+                    "multi_year_acv_eur":             0.0,
+                    "opportunity_acv_eur":            round(deal_acv_fy, 2),
+                    "opportunity_multi_year_acv_eur": round(deal_acv_my, 2),
+                    "invoice_date":                   invoice_dt,
+                    "month":                          period_ts.to_period("M").to_timestamp(),
+                    "close_date":                     close_dt,
+                    "is_forecast":                    False,
+                    "document_number":                str(r.get("Document Number", "")).strip(),
+                    "invoice_currency":               str(r["currency"]),
+                    "invoicing_cadence":              cadence,
+                })
 
-            deal_acv_fy = float(r["acv_eur"])
-            deal_acv_my = float(r["multi_year_acv_eur"])
+            # Forecast rows for remaining uninvoiced cadence slots
+            actual_count = len(pos_rows)
+            remaining    = n - actual_count
+            if remaining > 0:
+                base_dt = (
+                    max(close_dt, pd.Timestamp(contract_start_raw))
+                    if pd.notna(contract_start_raw)
+                    else close_dt
+                )
+                close_month     = close_dt.to_period("M").to_timestamp()
+                first_inv_month = quarter_end_month(close_month)
 
-            if total_eur_inv != 0 and deal_acv_fy > 0:
-                proportion = amount_eur_inv / total_eur_inv
-                commission_acv_fy = deal_acv_fy * proportion
-            else:
-                commission_acv_fy = amount_eur_inv
-
-            # Multi-year ACV commission paid in full on the first invoice only
-            is_first = (period_ts == first_inv_period.get(r["opportunity_id"]))
-            commission_acv_my = deal_acv_my if is_first else 0.0
-
-            rows.append({
-                "employee_id":                    r["employee_id"],
-                "opportunity_id":                 r["opportunity_id"],
-                "opportunity_name":               r.get("opportunity_name", r["opportunity_id"]),
-                "acv_eur":                        round(commission_acv_fy, 2),
-                "multi_year_acv_eur":             round(commission_acv_my, 2),
-                # Full deal-level ACV (pre-invoice-split) — used for quarterly gate/commission
-                "opportunity_acv_eur":            round(deal_acv_fy, 2),
-                "opportunity_multi_year_acv_eur": round(deal_acv_my, 2),
-                "invoice_date":                   invoice_dt,
-                "month":                          period_ts.to_period("M").to_timestamp(),
-                "close_date":                     r["close_date"],
-                "is_forecast":                    False,
-                "document_number":                str(r.get("Document Number", "")).strip(),
-                "invoice_currency":               inv_currency,
-                "invoicing_cadence":              r.get("invoicing_cadence", ""),
-            })
+                for idx in range(actual_count, n):
+                    if idx == 0:
+                        inv_month = first_inv_month
+                    else:
+                        inv_month = (base_dt + pd.DateOffset(months=months_between * idx)).to_period("M").to_timestamp()
+                    rows.append({
+                        "employee_id":                    emp_id_m,
+                        "opportunity_id":                 opp_id_m,
+                        "opportunity_name":               opp_name_m,
+                        "acv_eur":                        acv_per,
+                        "multi_year_acv_eur":             round(deal_acv_my, 2) if idx == 0 else 0.0,
+                        "opportunity_acv_eur":            round(deal_acv_fy, 2),
+                        "opportunity_multi_year_acv_eur": round(deal_acv_my, 2),
+                        "invoice_date":                   inv_month,
+                        "month":                          inv_month,
+                        "close_date":                     close_dt,
+                        "is_forecast":                    True,
+                        "document_number":                "",
+                        "invoice_currency":               "EUR",
+                        "invoicing_cadence":              cadence,
+                    })
 
     # ------------------------------------------------------------------
     # 6b. UNMATCHED deals: forecast rows, split by invoicing cadence
