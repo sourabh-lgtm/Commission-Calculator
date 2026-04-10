@@ -93,6 +93,16 @@ def load_sao_commission_data(data_dir: str, employees: pd.DataFrame) -> pd.DataF
     path = os.path.join(data_dir, "SAO_commission_data.csv")
     df = _read(path, ["SDR", "DCT Discovery", "Account Name", "Lead Source", "Opportunity Name"])
 
+    # Optional: intro meeting date (used by SPIF 8-week window instead of SAO date)
+    if "Intro Meeting Date" in df.columns:
+        df["intro_date"] = pd.to_datetime(
+            df["Intro Meeting Date"].astype(str).str.strip(),
+            format="%d/%m/%Y",
+            errors="coerce",
+        )
+    else:
+        df["intro_date"] = pd.NaT
+
     # --- 1. Drop blank SDR rows ---
     df = df[df["SDR"].str.strip() != ""].copy()
     if df.empty:
@@ -172,7 +182,7 @@ def load_sao_commission_data(data_dir: str, employees: pd.DataFrame) -> pd.DataF
     # --- Final: select and rename output columns ---
     result = df[[
         "date", "month", "employee_id", "opportunity_id",
-        "sao_type", "Account Name",
+        "sao_type", "Account Name", "intro_date",
     ]].rename(columns={"Account Name": "account_name"}).copy()
 
     result["stage"] = "sao"
@@ -182,7 +192,7 @@ def load_sao_commission_data(data_dir: str, employees: pd.DataFrame) -> pd.DataF
 def _empty_sao_df() -> pd.DataFrame:
     return pd.DataFrame(columns=[
         "date", "month", "employee_id", "opportunity_id",
-        "sao_type", "account_name", "stage",
+        "sao_type", "account_name", "intro_date", "stage",
     ])
 
 

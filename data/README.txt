@@ -48,11 +48,14 @@ OPTION B (fallback): employees.csv
    Source: Salesforce CRM report export (direct download, no reformatting needed)
    Required columns: SDR, DCT Discovery, Account Name, Lead Source, Opportunity Name
    Optional columns: Created By, Opportunity Owner, Type, Average ARR Currency,
-                     Average ARR, New ACV (converted) Currency, New ACV (converted)
+                     Average ARR, New ACV (converted) Currency, New ACV (converted),
+                     Intro Meeting Date
 
    Processing rules applied automatically:
    - Rows where SDR column is blank → ignored
    - DCT Discovery date (format: DD/MM/YYYY, HH:MM) → determines commission month
+   - Intro Meeting Date (format: DD/MM/YYYY) → used for SDR SPIF 8-week window;
+     falls back to DCT Discovery date if column is absent or blank
    - Lead Source "Outbound - *" → outbound SAO; "Inbound - *" → inbound SAO
    - Rows with blank/unknown Lead Source → ignored
    - 6-month account deduplication: if the same Account Name already had a

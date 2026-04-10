@@ -5,7 +5,8 @@ Q1 2026 SPIFs:
 SDR SPIF
 --------
   Flat fee per Closed Won New Business deal where:
-    - The deal closes within 8 weeks (56 days) of the SDR's SAO discovery date
+    - The deal closes within 8 weeks (56 days) of the SDR's introductory meeting date
+      (falls back to SAO discovery date if "Intro Meeting Date" column is absent)
     - Close date is in Q1 2026 (Jan–Mar)
   Payout: GBP £400 | SEK 5,000 | EUR 460 (approx)
   Payment month: month the deal closes
@@ -132,13 +133,24 @@ def calculate_sdr_spif(
     if cw_q1.empty:
         return _empty_spif_df()
 
-    # Earliest SAO date per (employee_id, opportunity_id)
+    # Earliest intro meeting date (and SAO date as fallback) per (employee_id, opportunity_id)
+    has_intro = "intro_date" in sdr_activities.columns
+    agg_cols = {"date": "min"}
+    if has_intro:
+        agg_cols["intro_date"] = "min"
     sao_dates = (
-        sdr_activities.groupby(["employee_id", "opportunity_id"])["date"]
-        .min()
+        sdr_activities.groupby(["employee_id", "opportunity_id"])
+        .agg(agg_cols)
         .reset_index()
         .rename(columns={"date": "sao_date", "opportunity_id": "opp_name_sao"})
     )
+    # ref_date = intro_date where available, else sao_date
+    if has_intro:
+        sao_dates["ref_date"] = sao_dates["intro_date"].where(
+            sao_dates["intro_date"].notna(), sao_dates["sao_date"]
+        )
+    else:
+        sao_dates["ref_date"] = sao_dates["sao_date"]
 
     # One commission row per unique (employee_id, opportunity_name) pair in Q1
     cw_unique = cw_q1.drop_duplicates(subset=["employee_id", "opportunity_name"])
@@ -155,8 +167,8 @@ def calculate_sdr_spif(
         print("[SPIF] SDR: no SAO→CW matches found for Q1 2026")
         return _empty_spif_df()
 
-    # Check 8-week window
-    merged["days_to_close"] = (merged["close_date"] - merged["sao_date"]).dt.days
+    # Check 8-week window (from intro meeting date to close date)
+    merged["days_to_close"] = (merged["close_date"] - merged["ref_date"]).dt.days
     qualifying = merged[merged["days_to_close"] <= (SDR_SPIF_WEEKS * 7)].copy()
 
     if qualifying.empty:
@@ -174,15 +186,17 @@ def calculate_sdr_spif(
         opp      = r["opportunity_name"]
         days     = int(r["days_to_close"])
 
+        ref_date  = r["ref_date"]
+        intro_str = ref_date.strftime("%Y-%m-%d") if pd.notna(ref_date) else ""
         rows.append({
             "employee_id":   emp_id,
             "name":          emp_name.get(emp_id, emp_id),
             "spif_id":       "sdr_q1_2026_8week",
-            "description":   f"SDR Q1 SPIF — {opp} (closed {days}d after SAO)",
+            "description":   f"SDR Q1 SPIF — {opp} (closed {days}d after intro meeting)",
             "amount":        amount,
             "currency":      currency,
             "payment_month": r["month"],
-            "sao_date":      r["sao_date"].strftime("%Y-%m-%d"),
+            "sao_date":      intro_str,
             "close_date":    r["close_date"].strftime("%Y-%m-%d"),
             "days_to_close": days,
             "opportunity":   opp,

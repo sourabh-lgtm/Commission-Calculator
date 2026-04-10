@@ -2,7 +2,7 @@
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.lib.styles import ParagraphStyle
-from reportlab.platypus import Spacer, Table, TableStyle, HRFlowable
+from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, HRFlowable
 
 from src.pdf._constants import CONTENT_W, CORAL, WHITE, BLACK, DIM, BORDER, CARD_BG, PURPLE
 from src.pdf._helpers import _para, _style, _sym, _num, _rate_label, _accel_desc

@@ -38,7 +38,7 @@ MODEL: CommissionModel = None
 APPROVAL: ApprovalState = None
 SMTP_CONFIG: dict = {}
 DATA_DIR: str = "data"
-LOGO_PATH: str = "assets/normative_logo.png"
+LOGO_PATH: str = "assets/normative-thumbnail-logo.jpg"
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +428,7 @@ def main():
     args = parser.parse_args()
 
     DATA_DIR  = args.data_dir
-    LOGO_PATH = os.path.join("assets", "normative_logo.png")
+    LOGO_PATH = os.path.join("assets", "normative-thumbnail-logo.jpg")
 
     SMTP_CONFIG = load_config("config.ini")
     APPROVAL    = ApprovalState(os.path.join(DATA_DIR, "approval_state.json"))

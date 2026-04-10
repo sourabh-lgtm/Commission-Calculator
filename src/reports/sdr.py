@@ -11,7 +11,10 @@ def team_overview(model, month: pd.Timestamp) -> dict:
     if model.commission_detail.empty:
         return {"employees": [], "kpis": {}}
 
-    df = model.commission_detail[model.commission_detail["month"] == month].copy()
+    df = model.commission_detail[
+        (model.commission_detail["month"] == month) &
+        (model.commission_detail["role"] == "sdr")
+    ].copy()
 
     # EUR conversion: total_commission is in local currency; fx_rate is EUR->local
     if not df.empty:

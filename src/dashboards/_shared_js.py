@@ -28,6 +28,12 @@ async function init() {
     gmEl.appendChild(opt);
   });
 
+  // Default to previous calendar month (fall back to most recent if not in data)
+  const now = new Date();
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevStr = prev.getFullYear() + '-' + String(prev.getMonth() + 1).padStart(2, '0') + '-01';
+  if ([...gmEl.options].some(o => o.value === prevStr)) gmEl.value = prevStr;
+
   await onRoleInit();
 }
 
