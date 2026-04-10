@@ -214,3 +214,94 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
             # Total
             "accelerator_topup":    total_bonus,
         }
+
+    # ------------------------------------------------------------------
+    # Workings rows — team activity detail for the dashboard
+    # ------------------------------------------------------------------
+    def get_workings_rows(
+        self,
+        employee: pd.Series,
+        month: pd.Timestamp,
+        activities: pd.DataFrame,
+        closed_won: pd.DataFrame,
+        fx_df: pd.DataFrame,
+        cs_performance: dict = None,
+    ) -> list[dict]:
+        """Return one row per team measure (SAO + ACV) for quarter-end months.
+
+        Non-quarter-end months have no commission, so return an empty list.
+        """
+        # Only emit rows at quarter-end months (Mar / Jun / Sep / Dec)
+        if month.month not in (3, 6, 9, 12):
+            return []
+
+        currency = employee["currency"]
+        q        = (month.month - 1) // 3 + 1
+        year     = month.year
+        months   = quarter_months(year, q)
+        q_end    = quarter_end_month(months[0])
+        fx_rate  = get_fx_rate(fx_df, q_end, currency)
+
+        # Load targets
+        targets_df = cs_performance.get("sdr_lead_targets", pd.DataFrame()) if cs_performance else pd.DataFrame()
+        quarterly_bonus_gbp = 2200.0
+        sao_target_q        = 54
+        acv_target_eur_q    = 223500.0
+        emp_id = employee["employee_id"]
+
+        if not targets_df.empty:
+            mask = (
+                (targets_df["employee_id"].astype(str) == str(emp_id)) &
+                (targets_df["year"].astype(int) == int(year))
+            )
+            row = targets_df[mask]
+            if not row.empty:
+                quarterly_bonus_gbp = float(row["quarterly_bonus_gbp"].iloc[0])
+                sao_target_q        = int(row["sao_team_target_q"].iloc[0])
+                acv_target_eur_q    = float(row["acv_team_target_eur_q"].iloc[0])
+
+        # Team SAO count
+        q_sao_count = 0
+        if not activities.empty and "month" in activities.columns:
+            q_sao_count = len(activities[activities["month"].isin(months)])
+
+        sao_attainment = q_sao_count / sao_target_q if sao_target_q > 0 else 0.0
+        sao_payout_pct = _tiered_payout(sao_attainment)
+        sao_bonus      = round(quarterly_bonus_gbp * MEASURE_WEIGHTS["sao"] * sao_payout_pct, 2)
+
+        # Team ACV
+        q_acv_eur = 0.0
+        sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
+        if not sdr_cw.empty and "month" in sdr_cw.columns:
+            team_cw = sdr_cw[sdr_cw["month"].isin(months)]
+            if "is_forecast" in team_cw.columns:
+                team_cw = team_cw[~team_cw["is_forecast"]]
+            q_acv_eur = float(team_cw["acv_eur"].sum())
+
+        acv_attainment = q_acv_eur / acv_target_eur_q if acv_target_eur_q > 0 else 0.0
+        acv_payout_pct = _tiered_payout(acv_attainment)
+        acv_bonus      = round(quarterly_bonus_gbp * MEASURE_WEIGHTS["acv"] * acv_payout_pct, 2)
+
+        date_str = q_end.strftime("%Y-%m-%d")
+        return [
+            {
+                "type":             "Team SAO",
+                "date":             date_str,
+                "opportunity_name": f"Team SAOs: {q_sao_count} / {sao_target_q}  ({sao_attainment * 100:.0f}% attainment)",
+                "sao_type":         "",
+                "acv_eur":          None,
+                "fx_rate":          fx_rate,
+                "rate_desc":        f"35% weight — {sao_payout_pct * 100:.0f}% tier payout",
+                "commission":       sao_bonus,
+            },
+            {
+                "type":             "Team ACV",
+                "date":             date_str,
+                "opportunity_name": f"Team ACV: \u20ac{q_acv_eur:,.0f} / \u20ac{acv_target_eur_q:,.0f}  ({acv_attainment * 100:.0f}% attainment)",
+                "sao_type":         "",
+                "acv_eur":          round(q_acv_eur, 2),
+                "fx_rate":          fx_rate,
+                "rate_desc":        f"65% weight — {acv_payout_pct * 100:.0f}% tier payout",
+                "commission":       acv_bonus,
+            },
+        ]

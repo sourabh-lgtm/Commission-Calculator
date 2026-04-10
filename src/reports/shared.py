@@ -19,6 +19,16 @@ def commission_workings(
     if emp_row.empty:
         return {"rows": [], "summary": {}}
 
+    # For role-split employees (e.g. sdr_lead Q1 → ae Q2+), pick the entry
+    # whose plan window covers the requested month.
+    if len(emp_row) > 1 and month is not None:
+        covering = emp_row[
+            (emp_row["plan_start_date"].isna() | (emp_row["plan_start_date"] <= month)) &
+            (emp_row["plan_end_date"].isna()   | (emp_row["plan_end_date"]   >= month))
+        ]
+        if not covering.empty:
+            emp_row = covering
+
     emp = emp_row.iloc[0]
     plan_cls = get_plan(emp["role"])
     if plan_cls is None:
@@ -43,6 +53,14 @@ def commission_workings(
             cs_performance=cs_perf,
             quarter=quarter,
             year=year,
+        )
+    elif emp["role"] == "sdr_lead" and cs_perf:
+        rows = plan.get_workings_rows(
+            emp, month,
+            model.sdr_activities,
+            model.closed_won,
+            model.fx_rates,
+            cs_performance=cs_perf,
         )
     else:
         rows = plan.get_workings_rows(

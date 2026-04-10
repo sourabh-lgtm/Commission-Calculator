@@ -379,11 +379,21 @@ def _make_pdf(emp_id: str, month_str: str) -> str | None:
         emp_row = MODEL.employees[MODEL.employees["employee_id"] == emp_id]
         if emp_row.empty:
             return None
-        emp = emp_row.iloc[0].to_dict()
 
         month_ts = _parse_month(month_str)
         if month_ts is None:
             return None
+
+        # For role-split employees (e.g. sdr_lead Q1 → ae Q2+), pick the entry
+        # whose plan window covers this month so the right PDF template is used.
+        if len(emp_row) > 1:
+            covering = emp_row[
+                (emp_row["plan_start_date"].isna() | (emp_row["plan_start_date"] <= month_ts)) &
+                (emp_row["plan_end_date"].isna()   | (emp_row["plan_end_date"]   >= month_ts))
+            ]
+            if not covering.empty:
+                emp_row = covering
+        emp = emp_row.iloc[0].to_dict()
 
         det = MODEL.commission_detail[
             (MODEL.commission_detail["employee_id"] == emp_id) &
