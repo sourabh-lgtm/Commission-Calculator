@@ -3,6 +3,7 @@ import os
 from datetime import date
 
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import Image, Spacer, Table, TableStyle, HRFlowable
 
 from src.pdf._constants import CONTENT_W, CORAL, BORDER, BLACK, DIM
@@ -15,7 +16,12 @@ def _cover_page(employee, period_label, logo_path):
 
     # Logo or wordmark
     if logo_path and os.path.exists(logo_path):
-        elements.append(Image(logo_path, width=50*mm, height=15*mm))
+        orig_w, orig_h = ImageReader(logo_path).getSize()
+        logo_w = 25 * mm
+        logo_h = logo_w * orig_h / orig_w
+        img = Image(logo_path, width=logo_w, height=logo_h)
+        img.hAlign = "LEFT"
+        elements.append(img)
     else:
         elements.append(_para("NORMATIVE", _style(
             "logo", fontName="Helvetica-Bold", fontSize=20, textColor=CORAL, spaceAfter=4

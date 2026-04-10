@@ -114,6 +114,7 @@ def payroll_summary(model, year: int) -> dict:
         regions.setdefault(region, []).append({
             "employee_id":      str(emp_id),
             "name":             emp["name"],
+            "role":             emp["role"],
             "cost_center_code": emp.get("cost_center_code", ""),
             "currency":         emp["currency"],
             "monthly":          monthly,
@@ -167,6 +168,7 @@ def accrual_summary(model, year: int) -> dict:
         base = {
             "employee_id":      str(emp_id),
             "name":             emp["name"],
+            "role":             emp["role"],
             "cost_center_code": emp.get("cost_center_code", ""),
             "currency":         currency,
             "monthly":          monthly,
@@ -226,6 +228,7 @@ def accrual_summary(model, year: int) -> dict:
         base = {
             "employee_id":      str(emp_id),
             "name":             emp["name"],
+            "role":             emp["role"],
             "cost_center_code": emp.get("cost_center_code", ""),
             "currency":         currency,
             "monthly":          monthly,
@@ -305,6 +308,7 @@ def accrual_summary(model, year: int) -> dict:
         base = {
             "employee_id":      str(emp_id),
             "name":             emp["name"],
+            "role":             emp["role"],
             "cost_center_code": emp.get("cost_center_code", ""),
             "currency":         currency,
             "monthly":          monthly,

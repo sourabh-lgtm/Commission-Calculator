@@ -1,6 +1,6 @@
 # Commission Calculator — Architecture & Codebase Reference
 
-> Living document for onboarding future Claude sessions. Last updated: 2026-04-09. Changes: quarterly NRR targets (1:1:1:2 weighting from annual target), cs_lead role (team-aggregate NRR/CSAT/credits, 20% bonus, multi-year ACV), synthetic churn for expired contracts, CSA no-credits default (100% payout), duplicate credits bug fix, one-off services (50% Non-Recurring TCV on Add-Ons in NRR), multi-year ACV gated by CS Opportunity Ownership, churned account credit exclusion (period-specific).
+> Living document for onboarding future Claude sessions. Last updated: 2026-04-10. Changes: AE commission plan (10% base, 1% multi-year, annual accelerators, quarterly 50% gate, year-end true-up), SDR Lead commission plan (team SAO + ACV measures, £2,200/quarter), refactor of reports/pdf_generator/dashboards into sub-packages, CS referrals loaded from Salesforce DCT report (cs_referrals_report.csv), new data files (ae_targets.csv, sdr_lead_targets.csv, cs_*_report.csv).
 
 ---
 
@@ -39,6 +39,7 @@ Commission Calculator/
 |   +-- loader.py               # CSV loading, SAO deduplication, data routing
 |   +-- humaans_loader.py       # Humaans HR export parser; job title → role mapping
 |   +-- closed_won_commission.py# ACV commission calculation from InputData + NetSuite invoices
+|   |                           #   build_ae_closed_won_commission() — AE deal data from InputData
 |   +-- cs_nrr_loader.py        # Computes NRR from cs_book_of_business.csv + InputData.csv
 |   |                           #   compute_cs_nrr()          — per-CSA NRR (individual BoB)
 |   |                           #   compute_cs_lead_nrr()     — team-aggregate NRR for cs_leads
@@ -48,40 +49,62 @@ Commission Calculator/
 |   |                           #   Both NRR functions include synthetic churn for expired
 |   |                           #   contracts (Renewal Date in YTD window, no renewal record)
 |   |                           #   multi-year ACV: Opportunity Owner must be a CS employee
-|   +-- reports.py              # All JSON report builder functions (called from API routes)
 |   +-- spif.py                 # SPIF award calculation logic
 |   +-- approval_state.py       # JSON-backed per-employee approval state machine
-|   +-- pdf_generator.py        # ReportLab commission statement PDFs — role-specific pages
-|   |                           #   generate_statement() dispatches on employee["role"]:
-|   |                           #   CS → _cs_summary_page() + _cs_workings_page()
-|   |                           #   SDR/AE/AM → _summary_page() + _workings_page()
 |   +-- email_sender.py         # SMTP email dispatch (statements + Excel reports)
 |   +-- helpers.py              # Shared utilities: get_fx_rate, quarter_months, clean_json, etc.
 |   +-- commission_plans/
-|   |   +-- __init__.py         # get_plan(role) registry
+|   |   +-- __init__.py         # get_plan(role) registry: sdr, cs, cs_lead, ae, sdr_lead
 |   |   +-- base.py             # BaseCommissionPlan ABC
 |   |   +-- sdr.py              # SDRCommissionPlan
-|   |   `-- cs.py               # CSACommissionPlan (Climate Strategy Advisors)
+|   |   +-- sdr_lead.py         # SDRLeadCommissionPlan (team SAO + ACV quarterly bonus)
+|   |   +-- cs.py               # CSACommissionPlan (Climate Strategy Advisors)
+|   |   +-- cs_lead.py          # CSLeadCommissionPlan (subclass of CSA; 20% bonus, team measures)
+|   |   `-- ae.py               # AECommissionPlan (10% base + multi-year + annual accelerators)
+|   +-- reports/
+|   |   +-- __init__.py         # Re-exports all public report functions
+|   |   +-- sdr.py              # team_overview, sdr_detail, monthly_summary, quarterly_summary
+|   |   +-- cs.py               # cs_overview, cs_quarterly
+|   |   +-- ae.py               # ae_overview, ae_detail, ae_monthly
+|   |   `-- shared.py           # commission_workings, payroll_summary, accrual_summary,
+|   |                           #   employee_list, available_months
+|   +-- pdf/
+|   |   +-- __init__.py         # Re-exports generate_statement
+|   |   +-- generator.py        # generate_statement() — dispatches on employee["role"]
+|   |   +-- _cover.py           # Cover page (logo, employee name, period, total)
+|   |   +-- _sdr.py             # SDR summary + workings pages
+|   |   +-- _cs.py              # CS summary + workings pages
+|   |   +-- _ae.py              # AE summary + workings pages
+|   |   +-- _constants.py       # Page margins, fonts, colours
+|   |   `-- _helpers.py         # Shared drawing helpers
 |   `-- dashboards/
-|       +-- base.py             # Shared HTML/CSS/JS (assemble_html, shared tab loaders)
+|       +-- __init__.py         # build_dashboard_html(role) dispatcher
+|       +-- base.py             # assemble_html(); imports from _styles, _shared_html, _shared_js
 |       |                       #   loadWorkings() — role-aware: CS branch vs SDR/AE/AM branch
 |       |                       #   loadAccrualSummary() — employer-contrib detection by explicit
 |       |                       #     type name, not by type !== 'Commission'
+|       +-- _styles.py          # Shared CSS (CSS constant)
+|       +-- _shared_html.py     # SHARED_TABS_HTML, SHARED_MODALS constants
+|       +-- _shared_js.py       # SHARED_JS constant (shared JS functions)
 |       +-- sdr.py              # SDR-specific nav links, tab HTML, role JS
 |       +-- cs.py               # CS-specific nav links, tab HTML, role JS
 |       +-- ae.py               # AE-specific nav links, tab HTML, role JS
-|       +-- am.py               # AM-specific nav links, tab HTML, role JS
-|       `-- __init__.py         # build_dashboard_html(role) dispatcher
+|       `-- am.py               # AM-specific nav links, tab HTML, role JS
 |
 +-- data/                       # Input CSVs — gitignored (contains PII)
 |   +-- README.txt              # Detailed data file spec (column names, formats, rules)
 |   +-- humaans_export.csv      # Primary HR source (employees, salaries, managers)
 |   +-- SAO_commission_data.csv # Salesforce CRM export (~4,830 rows)
-|   +-- InputData.csv           # Closed-won ACV data (~2,122 rows)
+|   +-- InputData.csv           # Closed-won ACV data — SDR + AE deals; also NRR source
+|   +-- InputData.xlsx          # Same source as InputData.csv (Excel format, optional)
 |   +-- InvoiceSearchCommissions.csv  # NetSuite invoice matching (144 rows)
 |   +-- employees.csv           # Fallback if humaans_export.csv absent
 |   +-- fx_rates.csv            # EUR→SEK/GBP/USD monthly rates
 |   +-- spif_targets.csv        # SPIF definitions
+|   +-- ae_targets.csv          # AE quarterly + annual targets (employee_id, year, quarterly_target_eur,
+|   |                           #   annual_target_eur, is_ramp_q1)
+|   +-- sdr_lead_targets.csv    # SDR Lead quarterly targets (employee_id, year,
+|   |                           #   sao_team_target_q, acv_team_target_eur_q, quarterly_bonus_gbp)
 |   +-- approval_state.json     # Auto-managed approval state (safe to delete to reset)
 |   |
 |   |   # CS (Climate Strategy) performance inputs — filled by Finance each quarter
@@ -91,10 +114,18 @@ Commission Calculator/
 |   |                           #   col 12 (index 11) = Account ID (15-char Salesforce ID)
 |   |                           #   col 13 (index 12) = Renewal Date (DD/MM/YYYY)
 |   |                           #   col 20 (index 19) = CSA 2026 — name matched to employees
-|   +-- cs_csat_sent.csv        # Total CSATs sent per employee per quarter (threshold check)
-|   +-- cs_csat_scores.csv      # Individual CSAT scores 0–5 (one row per response)
-|   +-- cs_credits.csv          # Service tier credits used % per employee per quarter
-|   `-- cs_referrals.csv        # CS referral SAOs and closed-won deals
+|   +-- cs_csat_report.csv      # Salesforce CSAT-sent report (Subject, First Name, Last Name,
+|   |                           #   Date, Assigned, Account Name); app computes csats_sent per
+|   |                           #   employee per quarter automatically
+|   +-- cs_csat_scores_report.csv # Salesforce CSAT-response report (CSA, Account,
+|   |                           #   Survey Response: Created Date, Survey Response: Survey Response Name,
+|   |                           #   Score); scores 1–5; app averages per employee per quarter
+|   +-- cs_credits_report.csv   # Salesforce credit-ledger report (Credit Ledger Name,
+|   |                           #   Contract Year Start/End Date, Credits Allocated,
+|   |                           #   Credits Used in Contract Year, Account: CSA: Full Name)
+|   `-- cs_referrals_report.csv # Salesforce DCT referral report (Company Referrer, DCT Discovery,
+|                               #   Stage, Amount, Amount Currency, Lead Source); parsed by
+|                               #   _parse_sf_referrals_report() in pipeline.py
 |
 +-- output/statements/          # Generated PDFs (gitignored)
 `-- assets/normative_logo.png   # Used in PDF statements
@@ -157,8 +188,9 @@ class CommissionModel:
                                    #   plan_start_date, plan_end_date
     salary_history: pd.DataFrame   # From Humaans; used for CS salary-based bonuses
     sdr_activities: pd.DataFrame   # Deduplicated SAOs from SAO_commission_data.csv
-    closed_won: pd.DataFrame       # ACV rows from InputData.csv + InvoiceSearch, with
+    closed_won: pd.DataFrame       # ACV rows from InputData.csv + InvoiceSearch (SDR), with
                                    #   is_forecast flag for unmatched deals
+    ae_closed_won: pd.DataFrame    # ACV rows for AE deals from InputData.csv + InvoiceSearch
     fx_rates: pd.DataFrame         # month, EUR_SEK, EUR_GBP, EUR_USD
     commission_monthly: pd.DataFrame  # Employee × month commission rows
     accelerators: pd.DataFrame     # Quarterly accelerator rows before merge
@@ -167,9 +199,14 @@ class CommissionModel:
     spif_awards: pd.DataFrame      # SPIF award rows
     active_months: list[Timestamp] # Sorted list of all months with data
     default_month: Timestamp       # Last active month (default for UI)
-    cs_performance: dict           # CS-specific inputs loaded from 5 CSVs:
-                                   #   {"nrr": df, "csat_sent": df, "csat_scores": df,
-                                   #    "credits": df, "referrals": df}
+    cs_performance: dict           # Shared performance dict passed to all commission plans:
+                                   #   CS keys:       "nrr", "nrr_breakdown", "nrr_targets",
+                                   #                  "csat_sent", "csat_scores",
+                                   #                  "credits", "credits_detail",
+                                   #                  "referrals", "cs_lead_multi_year_acv"
+                                   #   AE keys:       "ae_closed_won", "ae_targets"
+                                   #   SDR Lead keys: "sdr_closed_won", "sdr_lead_targets"
+                                   #   Shared:        "fx_rates"
                                    # Empty DataFrames if files absent (graceful degradation)
 ```
 
@@ -192,7 +229,7 @@ class CommissionModel:
 
 `cs_performance` is an optional dict of DataFrames (see CommissionModel above); SDR plans ignore it.
 
-`get_plan(role)` in `__init__.py` is the registry — returns the plan class for a given role string, or `None` if not commissioned.
+`get_plan(role)` in `__init__.py` is the registry — returns the plan class for a given role string, or `None` if not commissioned. Registered roles: `sdr`, `cs`, `cs_lead`, `ae`, `sdr_lead`.
 
 ### SDR Plan
 
@@ -291,7 +328,10 @@ Where `step = annual_target × 2% × quarterly_weight` (e.g. Q1 step = 96% × 2%
 - CSAs with no credit rows at all in the period get 100% payout by default (no credits at risk).
 
 **Referral commissions** (calculated monthly, same rates as SDR):
-- Source: `data/cs_referrals.csv` — one row per referral, columns: `employee_id, date, account_name, referral_type, acv_eur, is_closed_won, is_forecast`
+- Source: `data/cs_referrals_report.csv` — Salesforce DCT report export, parsed by `_parse_sf_referrals_report()` in `pipeline.py`
+  - Key columns: `Company Referrer` (CSA name), `DCT Discovery` (SAO date), `Stage`, `Amount`, `Amount Currency`, `Lead Source`
+  - A row with a DCT Discovery date earns the SAO commission; `Stage == "Closed Won"` additionally earns the ACV commission
+  - Lead Source `"Outbound - *"` → `outbound`; else → `inbound`
 - Active referral (outbound): SEK 1,300 / GBP 100 / EUR 115 per SAO + 5% of ACV closed-won
 - Inbound referral: SEK 590 / GBP 47 / EUR 55 per SAO + 1% of ACV closed-won
 - 50/50 split when both CSA and AM named on a referral — managed in source data, not in code
@@ -300,9 +340,57 @@ Where `step = annual_target × 2% × quarterly_weight` (e.g. Q1 step = 96% × 2%
 
 ---
 
+### AE Plan — Account Executives (src/commission_plans/ae.py)
+
+**Role**: `ae` | **Payout frequency**: Year-end (Q4 true-up)
+
+**Commission structure**:
+- Base rate: **10%** of 1st-year ACV
+- Multi-year bonus: **+1%** of ACV on year-2+ portion of multi-year renewals
+- Annual Accelerator 1: **12%** on incremental ACV between 100–150% of annual target
+- Annual Accelerator 2: **15%** on incremental ACV above 150% of annual target
+
+**Quarterly gate**: if a quarter's 1st-year ACV < 50% of the quarterly target, that quarter's ACV is excluded from the year-end calculation. Accelerators apply to total annual ACV regardless of gate.
+
+**Booking pattern**: `calculate_monthly()` records ACV pipeline data but returns zero commission. `calculate_quarterly_accelerator()` is only active for Q4 — it sums full-year qualifying ACV, applies gate + accelerators, and books the total as `accelerator_topup`.
+
+**Data sources**:
+- AE deal data: `ae_closed_won` DataFrame in `cs_performance` — built by `build_ae_closed_won_commission()` in `closed_won_commission.py` from `InputData.csv` + `InvoiceSearchCommissions.csv`
+- Targets: `data/ae_targets.csv` — columns: `employee_id`, `year`, `quarterly_target_eur`, `annual_target_eur`, `is_ramp_q1`
+
+---
+
+### SDR Lead Plan (src/commission_plans/sdr_lead.py)
+
+**Role**: `sdr_lead` | **Payout frequency**: Quarterly
+
+**Annual bonus pot**: £8,800 → **£2,200/quarter**
+
+**Two team-level measures**:
+
+| Measure | Weight | Default target |
+|---|---|---|
+| Team SAO count | 35% → £770/quarter | 54 SAOs/quarter |
+| Team closed-won ACV (EUR) | 65% → £1,430/quarter | €223,500/quarter |
+
+**Tiered payout** (same tiers for both measures):
+
+| Attainment | Payout |
+|---|---|
+| ≥ 100% | 100% of measure pot |
+| 75–99.99% | 75% |
+| 50–74.99% | 50% |
+| < 50% | 0% |
+
+**Data sources**: team SAOs from `model.sdr_activities` (all SDR employees aggregated). Team ACV from `sdr_closed_won` (= `model.closed_won`, actual invoices only). Targets from `data/sdr_lead_targets.csv` — columns: `employee_id`, `year`, `sao_team_target_q`, `acv_team_target_eur_q`, `quarterly_bonus_gbp`.
+
+The SDR Lead earns nothing from individual deals; this is a team-level bonus only. Commission is in GBP; FX conversion applies if the employee is paid in another currency.
+
+---
+
 ### Other Roles
 
-AE, AM, SE — plans not yet implemented. `get_plan()` returns `None` for them, so they are skipped in Stage 3.
+AM, SE — plans not yet implemented. `get_plan()` returns `None` for them, so they are skipped in Stage 3.
 
 **Note on Customer Success**: Humaans titles matching "Customer Success" are mapped to role `customer_success` (no plan). The `cs` role code is reserved for **Climate Strategy** employees.
 
@@ -323,9 +411,10 @@ AE, AM, SE — plans not yet implemented. `get_plan()` returns `None` for them, 
 | Title pattern | Role |
 |---|---|
 | `Sales Development Representative *`, `Enterprise Sales Development Rep` | `sdr` |
+| `SDR Lead`, `SDR Team Lead` | `sdr_lead` |
 | `Account Manager`, `Senior Account Manager` | `am` |
 | `Account Executive`, `Mid-market AE` | `ae` |
-| `Lead Climate Strategy Expert` | `cs` |
+| `Lead Climate Strategy Expert` | `cs_lead` |
 | `Senior Climate Strategy Advisor` | `cs` |
 | `Associate Climate Strategy Advisor` | `cs` |
 | `Climate Strategy Advisor` | `cs` |
@@ -368,6 +457,9 @@ All GET endpoints read from the `MODEL` global. All POST endpoints mutate `APPRO
 | `GET /api/monthly_summary?month=` | Monthly totals per employee |
 | `GET /api/quarterly_summary?year=&quarter=` | Quarterly rollup |
 | `GET /api/commission_workings?employee_id=&month=` | Line-by-line workings (per SAO / per deal) |
+| `GET /api/ae_overview?year=&quarter=` | AE pipeline + attainment for a quarter |
+| `GET /api/ae_detail?employee_id=&year=&quarter=` | One AE's quarterly commission detail |
+| `GET /api/ae_monthly?employee_id=&month=` | One AE's monthly deal workings |
 | `GET /api/spifs` | All SPIF awards |
 | `GET /api/approval_status?month=` | Approval state for all employees for a month |
 | `GET /api/preview_pdf?employee_id=&month=` | Stream generated PDF |
@@ -467,18 +559,22 @@ Single HTML page assembled at request time by `build_dashboard_html(role)`. No b
 
 14. **Churned account credits excluded** — when an account churns (Renewal Closed Lost) in a given quarter, its credit rows for that same quarter are excluded from the service credits calculation. Period-specific: a Q2 churn does not retroactively affect Q1 credits.
 
+15. **AE commission is a year-end true-up** — no commission is paid in Q1–Q3. The full year's ACV is calculated in Q4, applying the quarterly 50% gate per-quarter (failing quarters' ACV is excluded). Annual accelerators (12% / 15%) apply to total annual ACV regardless of gate.
+
+16. **SDR Lead is team-only** — the SDR Lead earns nothing from individual deals. Bonus is purely based on the whole SDR team's SAO count and closed-won ACV vs targets. Two weighted measures: 35% SAO count, 65% ACV, each with tiered payout (0/50/75/100%).
+
 ---
 
 ## Adding a New Commission Plan
 
-1. Create `src/commission_plans/<role>.py` — subclass `BaseCommissionPlan`, implement all 4 abstract methods. See `cs.py` for a salary-based quarterly plan; `sdr.py` for a transaction-based monthly plan.
-2. Register it in `src/commission_plans/__init__.py` `get_plan()` function.
+1. Create `src/commission_plans/<role>.py` — subclass `BaseCommissionPlan`, implement all 4 abstract methods. See `cs.py` for a salary-based quarterly plan; `sdr.py` for a transaction-based monthly plan; `ae.py` for a year-end true-up plan.
+2. Register it in `src/commission_plans/__init__.py` `PLAN_REGISTRY` dict.
 3. Add the job title → role mapping(s) to `_TITLE_RULES` in `src/humaans_loader.py`.
 4. The pipeline's Stage 3 will automatically pick it up for any employee whose `role` matches.
-5. Update `payroll_summary()` and `accrual_summary()` in `src/reports.py` to include the new role. For `accrual_summary()`: the `type` string you assign to accrual rows must **not** be `"Employer NI (13.8%)"` or `"Employer Social Contributions (31%)"` — those are the only strings treated as employer contributions in the UI banding.
+5. Update `payroll_summary()` and `accrual_summary()` in `src/reports/shared.py` to include the new role. For `accrual_summary()`: the `type` string you assign to accrual rows must **not** be `"Employer NI (13.8%)"` or `"Employer Social Contributions (31%)"` — those are the only strings treated as employer contributions in the UI banding.
 6. Update `_sheet_commission_workings()` in `export_excel.py` to include the new role.
-7. Create `src/dashboards/<role>.py` — define `_NAV_LINKS`, `_TABS_HTML`, `_ROLE_JS`, and `build_html()`. Register it in `src/dashboards/__init__.py`. For role-specific workings rendering, add a branch inside `loadWorkings()` in `src/dashboards/base.py` (do not redefine `loadWorkings` in role JS — the shared JS loads last and would override it).
-8. Update `generate_statement()` in `src/pdf_generator.py`: add a branch in the role dispatch to call new `_<role>_summary_page()` and `_<role>_workings_page()` functions.
+7. Create `src/dashboards/<role>.py` — define `_NAV_LINKS`, `_TABS_HTML`, `_ROLE_JS`, and `build_html()`. Register it in `src/dashboards/__init__.py`. For role-specific workings rendering, add a branch inside `loadWorkings()` in `src/dashboards/_shared_js.py` (do not redefine `loadWorkings` in role JS — the shared JS loads last and would override it).
+8. Create `src/pdf/_<role>.py` and add a branch in `generate_statement()` in `src/pdf/generator.py` to call `_<role>_summary_page()` and `_<role>_workings_page()`.
 
 ---
 
@@ -491,14 +587,17 @@ Single HTML page assembled at request time by `build_dashboard_html(role)`. No b
 | SDR accelerator not triggering | `sdr.py` `calculate_quarterly_accelerator()` — threshold is `QUARTERLY_SAO_TARGET = 9` outbound |
 | Employee missing from dashboard | `humaans_loader.py` `_TITLE_RULES` — check their job title mapping |
 | CS employee missing | Check their Humaans title matches a "climate strategy" pattern in `_TITLE_RULES` |
-| CS bonus showing 0 | Check `cs_nrr_targets.csv`, `cs_csat_sent.csv`, `cs_credits.csv` have a row for (employee_id, year, quarter); verify `employee_id` matches exactly; confirm quarterly NRR meets the prorated quarterly target |
+| CS bonus showing 0 | Check `cs_nrr_targets.csv`, `cs_csat_report.csv`, `cs_credits_report.csv` have data for (employee, year, quarter); verify `employee_id` matches exactly; confirm quarterly NRR meets the prorated quarterly target |
 | NRR one-off not appearing | Verify Add-On deal has non-zero `Non-Recurring TCV (converted)` in InputData and the account is in the CSA's BoB |
 | Multi-year ACV unexpected | Check Opportunity Owner in InputData — must be a CS employee; AMs/AEs are excluded. See `compute_cs_lead_multi_year_acv()` |
 | Credits score wrong / churned included | Check InputData for Renewal Closed Lost rows for that account in the same quarter; `_load_credits()` in pipeline.py logs excluded accounts |
-| CS CSAT bonus showing 0 | Verify `cs_csat_sent.csv` has `csats_sent >= 10` for the quarter; check `cs_csat_scores.csv` dates fall within the quarter |
-| CS accrual not showing | `reports.py` `accrual_summary()` CS section; check `salary_history` has records for that employee |
+| CS CSAT bonus showing 0 | Verify `cs_csat_report.csv` has rows for the quarter; check `cs_csat_scores_report.csv` dates fall within the quarter; confirm ≥10 CSATs sent |
+| CS accrual not showing | `src/reports/shared.py` `accrual_summary()` CS section; check `salary_history` has records for that employee |
 | CS accrual rows dimmed/in wrong total | The `type` string for CS rows must not equal `"Employer NI (13.8%)"` or `"Employer Social Contributions (31%)"` — those are the only two strings `loadAccrualSummary()` treats as employer contributions |
-| CS referral not appearing | Check `cs_referrals.csv` `employee_id` matches and `date` parses correctly; `is_closed_won` / `is_forecast` values |
+| CS referral not appearing | Check `cs_referrals_report.csv` has a `Company Referrer` name matching the employee; verify `DCT Discovery` date parses; check `Stage` for closed-won rows |
+| AE commission not appearing | Check `ae_targets.csv` has a row for the employee + year; verify `InputData.csv` has closed-won deals for the AE; Q4 only — no commission before year-end |
+| AE gate failing | Quarter's ACV must be ≥ 50% of `quarterly_target_eur`; check `ae_targets.csv` target values |
+| SDR Lead bonus not appearing | Check `sdr_lead_targets.csv` has a row for the employee + year; verify `sdr_activities` and `closed_won` have SDR team data |
 | Approval auto-reset on refresh | `approval_state.py` `check_and_reset_stale()` — total changed since approval |
 | Email not sending | `config.ini` SMTP section; check `launch.py` `SMTP_CONFIG` global |
 | Forecast deal appearing in total | `closed_won_commission.py` invoice matching logic — should have `is_forecast=True` |

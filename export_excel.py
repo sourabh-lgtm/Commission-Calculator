@@ -21,6 +21,17 @@ BLACK      = "000000"
 thin = Side(style="thin", color="E0E0E0")
 THIN_BORDER = Border(left=thin, right=thin, top=thin, bottom=thin)
 
+DEPT_BG      = "F5D5CC"   # light coral — department section headers
+SUBTOTAL_BG  = "E0E0E0"   # medium gray — department subtotals
+
+DEPT_ORDER = ["sdr", "ae", "cs", "cs_lead"]
+DEPT_LABELS = {
+    "sdr":     "SDR — Sales Development",
+    "ae":      "AE — Account Executives",
+    "cs":      "CS — Climate Strategy Advisors",
+    "cs_lead": "CS Lead",
+}
+
 
 def _header_style(ws, row, cols):
     for col in range(1, cols + 1):
@@ -287,39 +298,83 @@ def export_payroll_workbook(model, year: int) -> bytes:
             c.border    = THIN_BORDER
         ws.row_dimensions[4].height = 18
 
-        # --- Data rows ---
-        t_monthly = {m: 0.0 for m in months}
-        t_q = [0.0, 0.0, 0.0, 0.0]
-        t_total = 0.0
+        # --- Data rows grouped by department ---
+        from collections import defaultdict
+        dept_groups = defaultdict(list)
+        for emp in emps:
+            dept_groups[emp.get("role", "unknown")].append(emp)
 
-        for i, emp in enumerate(emps):
-            r = 5 + i
-            alt = i % 2 == 0
-            vals = ([emp["employee_id"], emp["name"], emp.get("cost_center_code",""), emp["currency"]]
-                    + [emp["monthly"].get(m, 0) for m in months]
-                    + [emp["q1"], emp["q2"], emp["q3"], emp["q4"], emp["total"]])
-            for col, v in enumerate(vals, 1):
+        t_monthly = {m: 0.0 for m in months}
+        t_q       = [0.0, 0.0, 0.0, 0.0]
+        t_total   = 0.0
+        r = 5
+
+        for dept in DEPT_ORDER:
+            dept_emps = dept_groups.get(dept, [])
+            if not dept_emps:
+                continue
+
+            # Section header (merged, light coral)
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols)
+            hc = ws.cell(row=r, column=1, value=DEPT_LABELS.get(dept, dept.upper()))
+            hc.font      = Font(name="Calibri", bold=True, size=10, color=DIM_HEX)
+            hc.fill      = PatternFill("solid", fgColor=DEPT_BG)
+            hc.alignment = Alignment(vertical="center")
+            ws.row_dimensions[r].height = 16
+            r += 1
+
+            s_monthly = {m: 0.0 for m in months}
+            s_q       = [0.0, 0.0, 0.0, 0.0]
+            s_total   = 0.0
+
+            for i, emp in enumerate(dept_emps):
+                alt  = i % 2 == 0
+                vals = ([emp["employee_id"], emp["name"], emp.get("cost_center_code",""), emp["currency"]]
+                        + [emp["monthly"].get(m, 0) for m in months]
+                        + [emp["q1"], emp["q2"], emp["q3"], emp["q4"], emp["total"]])
+                for col, v in enumerate(vals, 1):
+                    c = ws.cell(row=r, column=col, value=v)
+                    c.font      = Font(name="Calibri", size=10)
+                    c.alignment = Alignment(horizontal="right" if col > 4 else "left", vertical="center")
+                    c.border    = THIN_BORDER
+                    if alt:
+                        c.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
+                    if col > 4 and isinstance(v, (int, float)):
+                        c.number_format = "#,##0.00"
+                for m in months:
+                    s_monthly[m] += emp["monthly"].get(m, 0)
+                    t_monthly[m] += emp["monthly"].get(m, 0)
+                s_q[0] += emp["q1"]; s_q[1] += emp["q2"]
+                s_q[2] += emp["q3"]; s_q[3] += emp["q4"]
+                t_q[0] += emp["q1"]; t_q[1] += emp["q2"]
+                t_q[2] += emp["q3"]; t_q[3] += emp["q4"]
+                s_total += emp["total"]
+                t_total += emp["total"]
+                r += 1
+
+            # Section subtotal
+            dept_label = DEPT_LABELS.get(dept, dept.upper())
+            s_vals = (["", f"{dept_label} Total", "", ""]
+                      + [round(s_monthly[m], 2) for m in months]
+                      + [round(s_q[0], 2), round(s_q[1], 2), round(s_q[2], 2), round(s_q[3], 2),
+                         round(s_total, 2)])
+            for col, v in enumerate(s_vals, 1):
                 c = ws.cell(row=r, column=col, value=v)
-                c.font      = Font(name="Calibri", size=10)
+                c.font      = Font(name="Calibri", bold=True, size=10, italic=True)
+                c.fill      = PatternFill("solid", fgColor=SUBTOTAL_BG)
                 c.alignment = Alignment(horizontal="right" if col > 4 else "left", vertical="center")
                 c.border    = THIN_BORDER
-                if alt:
-                    c.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
                 if col > 4 and isinstance(v, (int, float)):
                     c.number_format = "#,##0.00"
-            for m in months:
-                t_monthly[m] += emp["monthly"].get(m, 0)
-            t_q[0] += emp["q1"]; t_q[1] += emp["q2"]
-            t_q[2] += emp["q3"]; t_q[3] += emp["q4"]
-            t_total += emp["total"]
+            r += 1
+            r += 1  # blank spacer between sections
 
-        # --- Totals row ---
-        tr = 5 + len(emps)
+        # --- Grand total row ---
         tvals = (["", "TOTAL", "", ""]
                  + [round(t_monthly[m], 2) for m in months]
                  + [round(x, 2) for x in t_q] + [round(t_total, 2)])
         for col, v in enumerate(tvals, 1):
-            c = ws.cell(row=tr, column=col, value=v)
+            c = ws.cell(row=r, column=col, value=v)
             c.font      = Font(name="Calibri", bold=True, size=10)
             c.fill      = PatternFill("solid", fgColor=TOTAL_BG)
             c.alignment = Alignment(horizontal="right" if col > 4 else "left", vertical="center")
@@ -396,46 +451,119 @@ def export_accrual_workbook(model, year: int) -> bytes:
             c.border    = THIN_BORDER
         ws.row_dimensions[4].height = 18
 
-        # --- Data rows ---
-        t_monthly = {m: 0.0 for m in months}
-        t_q = [0.0, 0.0, 0.0, 0.0]
-        t_total = 0.0
-        c_monthly = {m: 0.0 for m in months}
-        c_q = [0.0, 0.0, 0.0, 0.0]
-        c_total = 0.0
+        # --- Data rows grouped by department ---
+        from collections import defaultdict
+        dept_row_groups = defaultdict(list)
+        for row in rows:
+            dept_row_groups[row.get("role", "unknown")].append(row)
 
-        for i, row in enumerate(rows):
-            r    = 5 + i
-            alt  = i % 2 == 0
-            is_ni = row["type"] != "Commission"
-            vals  = ([row["employee_id"], row["name"], row.get("cost_center_code",""),
-                      row["type"], row.get("currency","")]
-                     + [row["monthly"].get(m, 0) for m in months]
-                     + [row["q1"], row["q2"], row["q3"], row["q4"], row["total"]])
-            for col, v in enumerate(vals, 1):
+        t_monthly = {m: 0.0 for m in months}
+        t_q       = [0.0, 0.0, 0.0, 0.0]
+        t_total   = 0.0
+        c_monthly = {m: 0.0 for m in months}
+        c_q       = [0.0, 0.0, 0.0, 0.0]
+        c_total   = 0.0
+        r = 5
+
+        for dept in DEPT_ORDER:
+            dept_rows = dept_row_groups.get(dept, [])
+            if not dept_rows:
+                continue
+
+            # Section header (merged, light coral)
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=n_cols)
+            hc = ws.cell(row=r, column=1, value=DEPT_LABELS.get(dept, dept.upper()))
+            hc.font      = Font(name="Calibri", bold=True, size=10, color=DIM_HEX)
+            hc.fill      = PatternFill("solid", fgColor=DEPT_BG)
+            hc.alignment = Alignment(vertical="center")
+            ws.row_dimensions[r].height = 16
+            r += 1
+
+            ds_monthly = {m: 0.0 for m in months}
+            ds_q       = [0.0, 0.0, 0.0, 0.0]
+            ds_total   = 0.0
+            dc_monthly = {m: 0.0 for m in months}
+            dc_q       = [0.0, 0.0, 0.0, 0.0]
+            dc_total   = 0.0
+            alt_ctr    = 0
+
+            for row in dept_rows:
+                is_ec = row["type"].startswith("Employer")
+                alt   = not is_ec and alt_ctr % 2 == 0
+                if not is_ec:
+                    alt_ctr += 1
+                vals = ([row["employee_id"], row["name"], row.get("cost_center_code",""),
+                         row["type"], row.get("currency","")]
+                        + [row["monthly"].get(m, 0) for m in months]
+                        + [row["q1"], row["q2"], row["q3"], row["q4"], row["total"]])
+                for col, v in enumerate(vals, 1):
+                    c = ws.cell(row=r, column=col, value=v)
+                    c.font      = Font(name="Calibri", size=10,
+                                       italic=is_ec, color="777777" if is_ec else BLACK)
+                    c.alignment = Alignment(horizontal="right" if col > 5 else "left", vertical="center")
+                    c.border    = THIN_BORDER
+                    if alt:
+                        c.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
+                    if col > 5 and isinstance(v, (int, float)):
+                        c.number_format = "#,##0.00"
+                if not is_ec:
+                    for m in months:
+                        ds_monthly[m] += row["monthly"].get(m, 0)
+                        t_monthly[m]  += row["monthly"].get(m, 0)
+                    ds_q[0] += row["q1"]; ds_q[1] += row["q2"]
+                    ds_q[2] += row["q3"]; ds_q[3] += row["q4"]
+                    t_q[0]  += row["q1"]; t_q[1]  += row["q2"]
+                    t_q[2]  += row["q3"]; t_q[3]  += row["q4"]
+                    ds_total += row["total"]
+                    t_total  += row["total"]
+                else:
+                    for m in months:
+                        dc_monthly[m] += row["monthly"].get(m, 0)
+                        c_monthly[m]  += row["monthly"].get(m, 0)
+                    dc_q[0] += row["q1"]; dc_q[1] += row["q2"]
+                    dc_q[2] += row["q3"]; dc_q[3] += row["q4"]
+                    c_q[0]  += row["q1"]; c_q[1]  += row["q2"]
+                    c_q[2]  += row["q3"]; c_q[3]  += row["q4"]
+                    dc_total += row["total"]
+                    c_total  += row["total"]
+                r += 1
+
+            # Section subtotal (commission / accrual)
+            dept_label = DEPT_LABELS.get(dept, dept.upper())
+            s_vals = (["", f"{dept_label} Total", "", "", ""]
+                      + [round(ds_monthly[m], 2) for m in months]
+                      + [round(ds_q[0], 2), round(ds_q[1], 2), round(ds_q[2], 2), round(ds_q[3], 2),
+                         round(ds_total, 2)])
+            for col, v in enumerate(s_vals, 1):
                 c = ws.cell(row=r, column=col, value=v)
-                c.font      = Font(name="Calibri", size=10,
-                                   italic=is_ni, color="777777" if is_ni else BLACK)
+                c.font      = Font(name="Calibri", bold=True, size=10, italic=True)
+                c.fill      = PatternFill("solid", fgColor=SUBTOTAL_BG)
                 c.alignment = Alignment(horizontal="right" if col > 5 else "left", vertical="center")
                 c.border    = THIN_BORDER
-                if alt and not is_ni:
-                    c.fill = PatternFill("solid", fgColor=ALT_ROW_BG)
                 if col > 5 and isinstance(v, (int, float)):
                     c.number_format = "#,##0.00"
-            if not is_ni:
-                for m in months:
-                    t_monthly[m] += row["monthly"].get(m, 0)
-                t_q[0] += row["q1"]; t_q[1] += row["q2"]
-                t_q[2] += row["q3"]; t_q[3] += row["q4"]
-                t_total += row["total"]
-            else:
-                for m in months:
-                    c_monthly[m] += row["monthly"].get(m, 0)
-                c_q[0] += row["q1"]; c_q[1] += row["q2"]
-                c_q[2] += row["q3"]; c_q[3] += row["q4"]
-                c_total += row["total"]
+            r += 1
 
-        # --- Totals rows ---
+            # Section employer contributions subtotal (only if present)
+            if dc_total > 0:
+                ec_vals = (["", f"{dept_label} Employer Contributions Total", "", "", ""]
+                           + [round(dc_monthly[m], 2) for m in months]
+                           + [round(dc_q[0], 2), round(dc_q[1], 2), round(dc_q[2], 2), round(dc_q[3], 2),
+                              round(dc_total, 2)])
+                for col, v in enumerate(ec_vals, 1):
+                    c = ws.cell(row=r, column=col, value=v)
+                    c.font      = Font(name="Calibri", bold=True, size=10, italic=True,
+                                       color="777777")
+                    c.fill      = PatternFill("solid", fgColor=SUBTOTAL_BG)
+                    c.alignment = Alignment(horizontal="right" if col > 5 else "left", vertical="center")
+                    c.border    = THIN_BORDER
+                    if col > 5 and isinstance(v, (int, float)):
+                        c.number_format = "#,##0.00"
+                r += 1
+
+            r += 1  # blank spacer between sections
+
+        # --- Grand total rows ---
         def _write_total_row(ws, r, label, vals_data, n_cols):
             tvals = ([label, "", "", "", ""]
                      + [round(vals_data[m], 2) for m in months]
@@ -449,11 +577,10 @@ def export_accrual_workbook(model, year: int) -> bytes:
                 if col > 5 and isinstance(v, (int, float)):
                     c.number_format = "#,##0.00"
 
-        tr = 5 + len(rows)
-        _write_total_row(ws, tr, "TOTAL (Commission)",
+        _write_total_row(ws, r, "TOTAL (Commission)",
                          {**t_monthly, "q": t_q, "total": t_total}, n_cols)
         if c_total > 0:
-            _write_total_row(ws, tr + 1, "TOTAL (Employer Contributions)",
+            _write_total_row(ws, r + 1, "TOTAL (Employer Contributions)",
                              {**c_monthly, "q": c_q, "total": c_total}, n_cols)
 
         # Column widths
