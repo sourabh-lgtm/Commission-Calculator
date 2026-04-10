@@ -153,11 +153,21 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
                 sao_target_q         = int(row["sao_team_target_q"].iloc[0])
                 acv_target_eur_q     = float(row["acv_team_target_eur_q"].iloc[0])
 
-        # --- Measure 1: Team SAO count ---
-        # activities contains ALL SDR employees' SAOs
+        # --- Resolve managed SDR employee IDs ---
+        employees_df = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
+        managed_ids: set[str] = set()
+        if not employees_df.empty and "manager_id" in employees_df.columns:
+            mask = (
+                employees_df["manager_id"].astype(str) == str(emp_id)
+            ) & employees_df["role"].isin(["sdr", "sdr_lead"])
+            managed_ids = set(employees_df.loc[mask, "employee_id"].astype(str))
+
+        # --- Measure 1: Team SAO count (only managed SDRs) ---
         q_sao_count = 0
         if not activities.empty and "month" in activities.columns:
             team_saos = activities[activities["month"].isin(months)]
+            if managed_ids and "employee_id" in team_saos.columns:
+                team_saos = team_saos[team_saos["employee_id"].astype(str).isin(managed_ids)]
             q_sao_count = len(team_saos)
 
         sao_attainment = q_sao_count / sao_target_q if sao_target_q > 0 else 0.0
@@ -165,11 +175,13 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
         sao_pot        = quarterly_bonus_gbp * MEASURE_WEIGHTS["sao"]
         sao_bonus      = round(sao_pot * sao_payout_pct, 2)
 
-        # --- Measure 2: Team closed-won ACV (EUR) ---
+        # --- Measure 2: Team closed-won ACV (EUR, only managed SDRs) ---
         q_acv_eur = 0.0
         sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
         if not sdr_cw.empty and "month" in sdr_cw.columns:
             team_cw = sdr_cw[sdr_cw["month"].isin(months)]
+            if managed_ids and "employee_id" in team_cw.columns:
+                team_cw = team_cw[team_cw["employee_id"].astype(str).isin(managed_ids)]
             # Only count actual invoices (not forecast) to avoid double-counting
             if "is_forecast" in team_cw.columns:
                 team_cw = team_cw[~team_cw["is_forecast"]]
@@ -260,20 +272,34 @@ class SDRLeadCommissionPlan(BaseCommissionPlan):
                 sao_target_q        = int(row["sao_team_target_q"].iloc[0])
                 acv_target_eur_q    = float(row["acv_team_target_eur_q"].iloc[0])
 
-        # Team SAO count
+        # Resolve managed SDR employee IDs
+        employees_df = cs_performance.get("employees", pd.DataFrame()) if cs_performance else pd.DataFrame()
+        managed_ids: set[str] = set()
+        if not employees_df.empty and "manager_id" in employees_df.columns:
+            mask = (
+                employees_df["manager_id"].astype(str) == str(emp_id)
+            ) & employees_df["role"].isin(["sdr", "sdr_lead"])
+            managed_ids = set(employees_df.loc[mask, "employee_id"].astype(str))
+
+        # Team SAO count (only managed SDRs)
         q_sao_count = 0
         if not activities.empty and "month" in activities.columns:
-            q_sao_count = len(activities[activities["month"].isin(months)])
+            team_saos = activities[activities["month"].isin(months)]
+            if managed_ids and "employee_id" in team_saos.columns:
+                team_saos = team_saos[team_saos["employee_id"].astype(str).isin(managed_ids)]
+            q_sao_count = len(team_saos)
 
         sao_attainment = q_sao_count / sao_target_q if sao_target_q > 0 else 0.0
         sao_payout_pct = _tiered_payout(sao_attainment)
         sao_bonus      = round(quarterly_bonus_gbp * MEASURE_WEIGHTS["sao"] * sao_payout_pct, 2)
 
-        # Team ACV
+        # Team ACV (only managed SDRs)
         q_acv_eur = 0.0
         sdr_cw = cs_performance.get("sdr_closed_won", pd.DataFrame()) if cs_performance else pd.DataFrame()
         if not sdr_cw.empty and "month" in sdr_cw.columns:
             team_cw = sdr_cw[sdr_cw["month"].isin(months)]
+            if managed_ids and "employee_id" in team_cw.columns:
+                team_cw = team_cw[team_cw["employee_id"].astype(str).isin(managed_ids)]
             if "is_forecast" in team_cw.columns:
                 team_cw = team_cw[~team_cw["is_forecast"]]
             q_acv_eur = float(team_cw["acv_eur"].sum())

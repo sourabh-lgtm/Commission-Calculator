@@ -50,6 +50,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.cs_performance["sdr_lead_targets"] = data.get("sdr_lead_targets", pd.DataFrame())
     model.cs_performance["ae_ramp_report"]   = data.get("ae_ramp_report", pd.DataFrame())
     model.cs_performance["fx_rates"]         = model.fx_rates
+    model.cs_performance["employees"]        = model.employees  # for SDR lead manager filtering
 
     # ------------------------------------------------------------------
     # Stage 2: Build activity calendar (all months present in activity data)
