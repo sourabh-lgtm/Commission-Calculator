@@ -26,7 +26,7 @@ from src.reports import (
 )
 from src.approval_state import ApprovalState
 from src.helpers import clean_json
-from src.pdf_generator import generate_statement
+from src.pdf import generate_statement
 from src.email_sender import send_statement, build_cc_list, send_excel_report
 from export_excel import export_payroll_workbook, export_accrual_workbook
 from src.dashboards import build_dashboard_html
