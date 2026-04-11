@@ -3,7 +3,9 @@
 NRR formula:
     NRR = (Add_Ons + One_Off_50pct + Upsell + Downsell + Churn + Total_ARR) / Total_ARR * 100
 
-One-off services: 50% of Non-Recurring TCV on Add-On deals (same as CS plan).
+One-off services: 50% of OO product line totals on Add-On deals (same as CS plan).
+Identified by Product Code starting with "OO"; computed pre-dedup as sum(Price*Qty)
+per opportunity so mixed OO/non-OO opportunities are handled correctly.
 
 Book of Business file: data/am_book_of_business.csv
   Combined file with all AM accounts (one row per account per AM).
@@ -114,11 +116,27 @@ def compute_am_nrr(
         inp.get("Contract Start Date", pd.Series(dtype=str)),
         format="%d/%m/%Y", errors="coerce",
     )
+    # OO product-code filter: sum Price*Qty for OO lines per opportunity (pre-dedup)
+    inp["_is_oo"] = inp["Product Code"].astype(str).str.startswith("OO", na=False)
+    inp["_oo_line_total"] = (
+        pd.to_numeric(inp.get("Price (converted)", 0), errors="coerce").fillna(0) *
+        pd.to_numeric(inp.get("Quantity", 1), errors="coerce").fillna(1)
+    )
+    _oo_by_opp = (
+        inp[inp["_is_oo"] & (inp["_type"] == "Add-On")]
+        .groupby("Opportunity Id Casesafe")["_oo_line_total"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_oo_line_total": "_oo_total"})
+    )
+
     inp_dedup = (
         inp.dropna(subset=["_close_date"])
            .drop_duplicates(subset=["Opportunity Id Casesafe"])
            .copy()
     )
+    inp_dedup = inp_dedup.merge(_oo_by_opp, on="Opportunity Id Casesafe", how="left")
+    inp_dedup["_oo_total"] = inp_dedup["_oo_total"].fillna(0)
 
     # Build name -> employee_id map for am / am_lead employees
     am_emps = employees_df[employees_df["role"].isin(["am", "am_lead"])][["employee_id", "name"]].copy()
@@ -206,8 +224,8 @@ def compute_am_nrr(
             ].copy()
 
             add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
-            # One-off: 50% of Non-Recurring TCV (same as CS plan)
-            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
+            # One-off: 50% of OO product line totals (Product Code starts with "OO")
+            one_off     = inp_q["_oo_total"].sum() * 0.50
             upsell_down = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -262,7 +280,7 @@ def compute_am_nrr(
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
+                acct_one_off = acct_q["_oo_total"].sum() * 0.50
                 acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
@@ -359,11 +377,27 @@ def compute_am_lead_nrr(
         inp.get("Contract Start Date", pd.Series(dtype=str)),
         format="%d/%m/%Y", errors="coerce",
     )
+    # OO product-code filter: sum Price*Qty for OO lines per opportunity (pre-dedup)
+    inp["_is_oo"] = inp["Product Code"].astype(str).str.startswith("OO", na=False)
+    inp["_oo_line_total"] = (
+        pd.to_numeric(inp.get("Price (converted)", 0), errors="coerce").fillna(0) *
+        pd.to_numeric(inp.get("Quantity", 1), errors="coerce").fillna(1)
+    )
+    _oo_by_opp = (
+        inp[inp["_is_oo"] & (inp["_type"] == "Add-On")]
+        .groupby("Opportunity Id Casesafe")["_oo_line_total"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_oo_line_total": "_oo_total"})
+    )
+
     inp_dedup = (
         inp.dropna(subset=["_close_date"])
            .drop_duplicates(subset=["Opportunity Id Casesafe"])
            .copy()
     )
+    inp_dedup = inp_dedup.merge(_oo_by_opp, on="Opportunity Id Casesafe", how="left")
+    inp_dedup["_oo_total"] = inp_dedup["_oo_total"].fillna(0)
 
     # All AM employee names (am only, not leads -- leads have their own BoB if any)
     all_am = employees_df[employees_df["role"].isin(["am", "am_lead"])][["employee_id", "name"]].copy()
@@ -441,7 +475,7 @@ def compute_am_lead_nrr(
             ].copy()
 
             add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
-            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
+            one_off     = inp_q["_oo_total"].sum() * 0.50
             upsell_down = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -489,7 +523,7 @@ def compute_am_lead_nrr(
             for acct_id, base_arr in sorted(all_acct_arr.items(), key=lambda x: -x[1]):
                 acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
+                acct_one_off = acct_q["_oo_total"].sum() * 0.50
                 acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()

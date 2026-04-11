@@ -1,7 +1,7 @@
 """Calculate NRR for each CSA from Book of Business + InputData.
 
 NRR formula (from commission plan):
-    NRR = (Add_Ons + Upsell + Downsell + Churn + Total_ARR) / Total_ARR * 100
+    NRR = (Add_Ons + One_Off_50pct + Upsell + Downsell + Churn + Total_ARR) / Total_ARR * 100
 
 Where from InputData (filtered to the year/quarter's close date range):
   - Opp Type = "Renewal", Stage != "Closed Lost":
@@ -10,6 +10,8 @@ Where from InputData (filtered to the year/quarter's close date range):
       Attainment New ACV → Add-Ons
   - Opp Type = "Renewal", Stage = "Closed Lost":
       Attainment New ACV → Churn (already negative in Salesforce export)
+  - Opp Type = "Add-On", Product Code starts with "OO":
+      50% of (Price × Quantity) per OO line → One_Off_50pct
 
 Book of Business CSV columns used:
   - Column J (index 9)  = "Flat Renewal ACV (converted)"  — starting ARR per account
@@ -24,6 +26,13 @@ Deduplication:
   InputData has one row per product line item; we deduplicate by
   Opportunity Id Casesafe before aggregating so multi-line deals
   are not double-counted.
+
+OO product code handling:
+  One-off services are identified by Product Code starting with "OO".
+  Since an opportunity may have mixed OO and non-OO product lines, the
+  OO total is computed pre-deduplication as sum(Price*Qty) across all OO
+  lines per opportunity, then merged onto the deduplicated table.
+  This avoids the problem where drop_duplicates keeps a non-OO row first.
 """
 
 import os
@@ -146,12 +155,28 @@ def compute_cs_nrr(
         format="%d/%m/%Y", errors="coerce",
     )
 
+    # OO product-code filter: sum Price*Qty for OO lines per opportunity (pre-dedup)
+    inp["_is_oo"] = inp["Product Code"].astype(str).str.startswith("OO", na=False)
+    inp["_oo_line_total"] = (
+        pd.to_numeric(inp.get("Price (converted)", 0), errors="coerce").fillna(0) *
+        pd.to_numeric(inp.get("Quantity", 1), errors="coerce").fillna(1)
+    )
+    _oo_by_opp = (
+        inp[inp["_is_oo"] & (inp["_type"] == "Add-On")]
+        .groupby("Opportunity Id Casesafe")["_oo_line_total"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_oo_line_total": "_oo_total"})
+    )
+
     # Deduplicate by Opportunity Id — keep one row per opp (product lines inflate counts)
     inp_dedup = (
         inp.dropna(subset=["_close_date"])
            .drop_duplicates(subset=["Opportunity Id Casesafe"])
            .copy()
     )
+    inp_dedup = inp_dedup.merge(_oo_by_opp, on="Opportunity Id Casesafe", how="left")
+    inp_dedup["_oo_total"] = inp_dedup["_oo_total"].fillna(0)
 
     # ---- Build name → employee_id map (with last-name fallback) ----
     cs_emps = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
@@ -242,7 +267,7 @@ def compute_cs_nrr(
             ].copy()
 
             add_ons       = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
-            one_off       = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+            one_off       = inp_q["_oo_total"].sum() * 0.5
             upsell_down   = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -309,7 +334,7 @@ def compute_cs_nrr(
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+                acct_one_off = acct_q["_oo_total"].sum() * 0.5
                 acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
@@ -415,11 +440,27 @@ def compute_cs_lead_nrr(
         inp.get("Contract Start Date", pd.Series(dtype=str)),
         format="%d/%m/%Y", errors="coerce",
     )
+    # OO product-code filter: sum Price*Qty for OO lines per opportunity (pre-dedup)
+    inp["_is_oo"] = inp["Product Code"].astype(str).str.startswith("OO", na=False)
+    inp["_oo_line_total"] = (
+        pd.to_numeric(inp.get("Price (converted)", 0), errors="coerce").fillna(0) *
+        pd.to_numeric(inp.get("Quantity", 1), errors="coerce").fillna(1)
+    )
+    _oo_by_opp = (
+        inp[inp["_is_oo"] & (inp["_type"] == "Add-On")]
+        .groupby("Opportunity Id Casesafe")["_oo_line_total"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_oo_line_total": "_oo_total"})
+    )
+
     inp_dedup = (
         inp.dropna(subset=["_close_date"])
            .drop_duplicates(subset=["Opportunity Id Casesafe"])
            .copy()
     )
+    inp_dedup = inp_dedup.merge(_oo_by_opp, on="Opportunity Id Casesafe", how="left")
+    inp_dedup["_oo_total"] = inp_dedup["_oo_total"].fillna(0)
 
     # Name → employee_id for all CS/cs_lead employees (for BoB name matching)
     all_cs = employees_df[employees_df["role"].isin(["cs", "cs_lead"])][["employee_id", "name"]].copy()
@@ -509,7 +550,7 @@ def compute_cs_lead_nrr(
             ].copy()
 
             add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
-            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+            one_off     = inp_q["_oo_total"].sum() * 0.5
             upsell_down = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -564,7 +605,7 @@ def compute_cs_lead_nrr(
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+                acct_one_off = acct_q["_oo_total"].sum() * 0.5
                 acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
@@ -671,11 +712,27 @@ def compute_cs_director_nrr(
         inp.get("Contract Start Date", pd.Series(dtype=str)),
         format="%d/%m/%Y", errors="coerce",
     )
+    # OO product-code filter: sum Price*Qty for OO lines per opportunity (pre-dedup)
+    inp["_is_oo"] = inp["Product Code"].astype(str).str.startswith("OO", na=False)
+    inp["_oo_line_total"] = (
+        pd.to_numeric(inp.get("Price (converted)", 0), errors="coerce").fillna(0) *
+        pd.to_numeric(inp.get("Quantity", 1), errors="coerce").fillna(1)
+    )
+    _oo_by_opp = (
+        inp[inp["_is_oo"] & (inp["_type"] == "Add-On")]
+        .groupby("Opportunity Id Casesafe")["_oo_line_total"]
+        .sum()
+        .reset_index()
+        .rename(columns={"_oo_line_total": "_oo_total"})
+    )
+
     inp_dedup = (
         inp.dropna(subset=["_close_date"])
            .drop_duplicates(subset=["Opportunity Id Casesafe"])
            .copy()
     )
+    inp_dedup = inp_dedup.merge(_oo_by_opp, on="Opportunity Id Casesafe", how="left")
+    inp_dedup["_oo_total"] = inp_dedup["_oo_total"].fillna(0)
 
     # Name → employee_id for ALL CS roles (cs, cs_lead, cs_director)
     all_cs = employees_df[employees_df["role"].isin(["cs", "cs_lead", "cs_director"])][["employee_id", "name"]].copy()
@@ -759,7 +816,7 @@ def compute_cs_director_nrr(
             ].copy()
 
             add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
-            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+            one_off     = inp_q["_oo_total"].sum() * 0.5
             upsell_down = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -815,7 +872,7 @@ def compute_cs_director_nrr(
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.5
+                acct_one_off = acct_q["_oo_total"].sum() * 0.5
                 acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
