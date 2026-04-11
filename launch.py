@@ -23,6 +23,7 @@ from src.reports import (
     payroll_summary, accrual_summary,
     cs_overview, cs_quarterly,
     ae_overview, ae_detail, ae_monthly,
+    am_overview, am_quarterly,
 )
 from src.approval_state import ApprovalState
 from src.helpers import clean_json
@@ -151,6 +152,17 @@ class Handler(BaseHTTPRequestHandler):
             yr = int(_p("year", pd.Timestamp.now().year))
             qt = int(_p("quarter", 1))
             self._respond(cs_quarterly(MODEL, yr, qt))
+            return
+
+        if path == "/api/am_overview":
+            month = _parse_month(_p("month", MODEL.default_month.strftime("%Y-%m-%d") if MODEL.default_month else None))
+            self._respond(am_overview(MODEL, month))
+            return
+
+        if path == "/api/am_quarterly":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            qt = int(_p("quarter", 1))
+            self._respond(am_quarterly(MODEL, yr, qt))
             return
 
         if path == "/api/commission_workings":

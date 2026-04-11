@@ -1,6 +1,6 @@
 # Commission Calculator — Architecture & Navigation Reference
 
-> Living document. Last updated: 2026-04-11. See `COMMISSION_PLANS.md` for full rate tables, formulas, and payout tiers.
+> Living document. Last updated: 2026-04-11 (AM dashboard + PDF implemented). See `COMMISSION_PLANS.md` for full rate tables, formulas, and payout tiers.
 
 ---
 
@@ -96,6 +96,7 @@ Commission Calculator/
 |   |   +-- sdr.py               # team_overview, sdr_detail, monthly_summary, quarterly_summary
 |   |   +-- cs.py                # cs_overview, cs_quarterly
 |   |   +-- ae.py                # ae_overview, ae_detail, ae_monthly
+|   |   +-- am.py                # am_overview, am_quarterly
 |   |   `-- shared.py            # commission_workings, payroll_summary, accrual_summary,
 |   |                            #   employee_list, available_months
 |   |
@@ -104,23 +105,28 @@ Commission Calculator/
 |   |   +-- generator.py         # generate_statement() — dispatches on employee["role"]
 |   |   +-- _cover.py            # Cover page (logo, employee name, period, total)
 |   |   +-- _sdr.py              # SDR summary + workings pages
-|   |   +-- _cs.py               # CS/AM summary + workings pages
+|   |   +-- _cs.py               # CS/CS Lead/CS Director summary + workings pages
+|   |   +-- _am.py               # AM/AM Lead summary + workings pages
 |   |   +-- _ae.py               # AE summary + workings pages
 |   |   +-- _constants.py        # Page margins, fonts, colours
 |   |   `-- _helpers.py          # Shared drawing helpers
 |   |
 |   `-- dashboards/
 |       +-- __init__.py          # build_dashboard_html(role) dispatcher
-|       +-- base.py              # assemble_html() — loadWorkings() role-aware (cs vs sdr/ae/am)
+|       +-- base.py              # assemble_html() — shell assembler
 |       |                        #   loadAccrualSummary() — employer-contrib detected by exact type
 |       |                        #   name string, not by type != "Commission"
 |       +-- _styles.py           # Shared CSS constant
 |       +-- _shared_html.py      # SHARED_TABS_HTML, SHARED_MODALS constants
 |       +-- _shared_js.py        # SHARED_JS constant (shared JS; loads LAST, wins over role JS)
+|       |                        #   loadWorkings() — CS/AM branch (NRR-based) vs SDR/AE branches
+|       |                        #   filterByRole() — groups am_lead with am, sdr_lead with sdr
 |       +-- sdr.py               # SDR nav links, tab HTML, role JS
 |       +-- cs.py                # CS nav links, tab HTML, role JS
 |       +-- ae.py                # AE nav links, tab HTML, role JS
 |       `-- am.py                # AM nav links, tab HTML, role JS
+|                                #   Tabs: Team Overview, Monthly Summary, Quarterly Performance,
+|                                #         Manager Detail, Bonus Workings, Approve & Send
 |
 +-- data/                        # Input CSVs — gitignored (contains PII)
 |   +-- README.txt               # Column-level spec for every data file
@@ -292,6 +298,8 @@ PLAN_REGISTRY = {
 | `GET /api/commission_workings?employee_id=&month=` | Line-by-line workings (per SAO / per deal) |
 | `GET /api/cs_overview?month=` | CS team overview + performance metrics |
 | `GET /api/cs_quarterly?year=&quarter=` | CS quarterly detail |
+| `GET /api/am_overview?month=` | AM team overview (NRR, multi-year ACV, referrals) |
+| `GET /api/am_quarterly?year=&quarter=` | AM quarterly detail |
 | `GET /api/ae_overview?year=&quarter=` | AE pipeline + attainment for a quarter |
 | `GET /api/ae_detail?employee_id=&year=&quarter=` | One AE's quarterly commission detail |
 | `GET /api/ae_monthly?employee_id=&month=` | One AE's monthly deal workings |
@@ -345,7 +353,8 @@ Persisted to `data/approval_state.json`. Delete file to reset all approvals.
 
 `generate_statement()` in `generator.py` dispatches on `employee["role"]`:
 - `sdr` -> `_sdr.py` (SAO/ACV breakdown)
-- `cs`, `cs_lead`, `cs_director`, `am`, `am_lead` -> `_cs.py` (NRR/CSAT/Credits KPIs)
+- `cs`, `cs_lead`, `cs_director` -> `_cs.py` (NRR 50% / CSAT 35% / Credits 15%)
+- `am`, `am_lead` -> `_am.py` (NRR 100%, multi-year ACV, referrals)
 - `ae` -> `_ae.py` (ACV attainment, gate, accelerators)
 - All roles get cover page from `_cover.py`
 
@@ -355,7 +364,11 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 
 **Key behaviour**: `_shared_js.py` is loaded LAST, so shared functions (e.g. `loadWorkings()`) win over role-specific JS. Role-specific UI branches live **inside** shared functions keyed by `globalRole()` — do not redefine shared functions in role JS files.
 
-`loadWorkings()` is role-aware: `cs`/`am`/`cs_lead`/`am_lead` get CS-style KPI cards + 5-column table; `sdr`/`ae` get the 8-column SAO audit table.
+`loadWorkings()` is role-aware:
+- `cs`/`cs_lead` — KPI cards: NRR (50%) + CSAT (35%) + Credits (15%) + Referrals + Accelerator; bonusAmts keyed on `"CS Bonus — NRR (50%)"` etc.; 5-column table
+- `am`/`am_lead` — KPI cards: NRR (100%) + Multi-year ACV + Referrals + Accelerator; bonusAmts keyed on `"AM Bonus — NRR (100%)"` ; same 5-column table renderer
+- `ae` — ACV attainment table (8 columns)
+- `sdr`/`sdr_lead` — SAO audit table (8 columns)
 
 `loadAccrualSummary()` identifies employer-contribution rows by exact type name (`"Employer NI (13.8%)"`, `"Employer Social Contributions (31%)"`) — not by `type != "Commission"`.
 
@@ -370,7 +383,7 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 5. Update `payroll_summary()` and `accrual_summary()` in `src/reports/shared.py`. The `type` string for accrual rows must NOT be `"Employer NI (13.8%)"` or `"Employer Social Contributions (31%)"`.
 6. Update `_sheet_commission_workings()` in `export_excel.py`.
 7. Create `src/dashboards/<role>.py` — define `_NAV_LINKS`, `_TABS_HTML`, `_ROLE_JS`, `build_html()`. Register in `src/dashboards/__init__.py`. Add role-specific workings branch inside `loadWorkings()` in `_shared_js.py`.
-8. Create `src/pdf/_<role>.py`; add branch in `src/pdf/generator.py`.
+8. Create `src/pdf/_<role>.py`; add branch in `src/pdf/generator.py`. Reference: `_cs.py` (salary-based quarterly), `_am.py` (NRR-only, no CSAT/Credits), `_ae.py` (year-end true-up).
 
 ---
 
@@ -424,6 +437,14 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 | AM multi-year ACV wrong | `src/am_nrr_loader.py` | `compute_am_multi_year_acv()` — 1% of year-2+ ACV on renewal deals in AM's BoB |
 | AM Lead NRR wrong | `src/am_nrr_loader.py` | `compute_am_lead_nrr()` — team-aggregate of all AM accounts; check am_lead employee mapping |
 | AM referral not appearing | `src/pipeline.py` + `src/commission_plans/am.py` | Referrals sourced from cs_referrals_report.csv; paid at quarter-end months only |
+| AM workings showing SDR-style SAO table | `src/dashboards/_shared_js.py` | `loadWorkings()` — AM/AM Lead must fall into the `['cs','cs_lead','am','am_lead']` branch, not the SDR fallback |
+| AM workings bonus row missing | `src/commission_plans/am.py` | Row type must be `"AM Bonus — NRR (100%)"` — bonusAmts in JS and `_am_workings_page()` in PDF both key on this exact string |
+| AM workings missing cs_performance data | `src/reports/shared.py` | `commission_workings()` — AM/AM Lead must be in the `elif emp["role"] in ("am", "am_lead") and cs_perf` branch (not the bare `else`) |
+| AM missing from payroll/accrual workbooks | `src/reports/shared.py` | `payroll_summary()` and `accrual_summary()` — check `am`/`am_lead` included in role filter; accrual uses salary x 20% |
+| AM missing from employees list | `src/reports/shared.py` | `employee_list()` — check `am`/`am_lead` in role isin list |
+| AM dashboard not loading | `src/dashboards/am.py` | Check `onRoleInit()` populates am-ind-emp + wk-emp selects; `loadTab()` dispatches `am-overview` etc. |
+| AM overview / quarterly API 404 | `launch.py` | Routes `/api/am_overview` and `/api/am_quarterly` — check they are registered in the GET handler |
+| AM PDF blank workings | `src/pdf/_am.py` | `_am_workings_page()` — check `_bonus_amts` key matches actual row type from `am.py` plan |
 | **SDR Lead commission** | | |
 | SDR Lead bonus not appearing | `src/commission_plans/sdr_lead.py` | Check sdr_lead_targets.csv has row for employee + year |
 | SDR Lead SAO count wrong | `src/commission_plans/sdr_lead.py` | Uses model.sdr_activities (all SDR team); check sdr activities loaded correctly |

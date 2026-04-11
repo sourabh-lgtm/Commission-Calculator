@@ -1,7 +1,7 @@
 # Commission Plans — Rates, Formulas & Payout Tiers
 
 > This file documents the math behind every commission plan. For which file to edit, see `ARCHITECTURE.md`.
-> Last updated: 2026-04-11.
+> Last updated: 2026-04-11 (AM dashboard + PDF implemented).
 
 ---
 

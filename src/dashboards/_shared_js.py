@@ -60,8 +60,10 @@ function globalRole() {
 function filterByRole(arr) {
   const role = globalRole();
   if (!role) return arr;
-  // sdr_lead is shown alongside sdrs in all team and individual views
-  const group = role === 'sdr' ? ['sdr', 'sdr_lead'] : [role];
+  // sdr_lead shown alongside sdrs; am_lead shown alongside ams
+  const group = role === 'sdr' ? ['sdr', 'sdr_lead']
+              : role === 'am'  ? ['am',  'am_lead']
+              : [role];
   return arr.filter(e => group.includes(e.role));
 }
 
@@ -177,20 +179,32 @@ async function loadWorkings() {
   const {rows, summary} = data;
   const cur = summary.currency || 'EUR';
 
-  // ---- CS (Climate Strategy Advisor / CS Lead) ----
-  if (['cs', 'cs_lead'].includes(globalRole())) {
+  // ---- CS / AM (shared NRR-based bonus workings renderer) ----
+  if (['cs', 'cs_lead', 'am', 'am_lead'].includes(globalRole())) {
+    const isAm = ['am', 'am_lead'].includes(globalRole());
     const kpiEl = document.getElementById('wk-kpis');
     const refComm = (summary.referral_sao_comm||0) + (summary.referral_cw_comm||0);
-    kpiEl.innerHTML =
-      kpiCard('Total Payout', fmtAmt(summary.total_commission||0, cur), fmtMonth(month)) +
-      kpiCard('NRR Bonus (50%)', fmtAmt(summary.nrr_bonus||0, cur), 'NRR ' + (summary.nrr_pct ? summary.nrr_pct.toFixed(1) + '%' : '\u2014')) +
-      kpiCard('CSAT Bonus (35%)', fmtAmt(summary.csat_bonus||0, cur), 'CSAT ' + (summary.csat_score_pct ? summary.csat_score_pct.toFixed(1) + '%' : '\u2014')) +
-      kpiCard('Credits Bonus (15%)', fmtAmt(summary.credits_bonus||0, cur), 'Credits ' + (summary.credits_used_pct ? summary.credits_used_pct.toFixed(1) + '%' : '\u2014')) +
-      kpiCard('Referral Comm', fmtAmt(refComm, cur), (summary.referral_sao_count||0) + ' referral' + ((summary.referral_sao_count||0) !== 1 ? 's' : '')) +
-      ((summary.accelerator_topup||0) > 0 ? kpiCard('NRR Accelerator', fmtAmt(summary.accelerator_topup, cur), 'Top-up') : '');
+    if (isAm) {
+      kpiEl.innerHTML =
+        kpiCard('Total Payout', fmtAmt(summary.total_commission||0, cur), fmtMonth(month)) +
+        kpiCard('NRR Bonus (100%)', fmtAmt(summary.nrr_bonus||0, cur), 'NRR ' + (summary.nrr_pct ? summary.nrr_pct.toFixed(1) + '%' : '\u2014')) +
+        kpiCard('Multi-year ACV', fmtAmt(summary.multi_year_comm||0, cur), '1% of year-2+ ACV') +
+        kpiCard('Referral Comm', fmtAmt(refComm, cur), (summary.referral_sao_count||0) + ' referral' + ((summary.referral_sao_count||0) !== 1 ? 's' : '')) +
+        ((summary.accelerator_topup||0) > 0 ? kpiCard('NRR Accelerator', fmtAmt(summary.accelerator_topup, cur), 'Q4 top-up') : '');
+    } else {
+      kpiEl.innerHTML =
+        kpiCard('Total Payout', fmtAmt(summary.total_commission||0, cur), fmtMonth(month)) +
+        kpiCard('NRR Bonus (50%)', fmtAmt(summary.nrr_bonus||0, cur), 'NRR ' + (summary.nrr_pct ? summary.nrr_pct.toFixed(1) + '%' : '\u2014')) +
+        kpiCard('CSAT Bonus (35%)', fmtAmt(summary.csat_bonus||0, cur), 'CSAT ' + (summary.csat_score_pct ? summary.csat_score_pct.toFixed(1) + '%' : '\u2014')) +
+        kpiCard('Credits Bonus (15%)', fmtAmt(summary.credits_bonus||0, cur), 'Credits ' + (summary.credits_used_pct ? summary.credits_used_pct.toFixed(1) + '%' : '\u2014')) +
+        kpiCard('Referral Comm', fmtAmt(refComm, cur), (summary.referral_sao_count||0) + ' referral' + ((summary.referral_sao_count||0) !== 1 ? 's' : '')) +
+        ((summary.accelerator_topup||0) > 0 ? kpiCard('NRR Accelerator', fmtAmt(summary.accelerator_topup, cur), 'Top-up') : '');
+    }
 
     // Map quarterly bonus amounts from summary (backend returns commission:null for these rows)
-    const bonusAmts = {
+    const bonusAmts = isAm ? {
+      'AM Bonus \u2014 NRR (100%)': summary.nrr_bonus || 0,
+    } : {
       'CS Bonus \u2014 NRR (50%)':             summary.nrr_bonus    || 0,
       'CS Bonus \u2014 CSAT (35%)':            summary.csat_bonus   || 0,
       'CS Bonus \u2014 Service Credits (15%)': summary.credits_bonus || 0,
