@@ -32,9 +32,16 @@ _TITLE_RULES: list[tuple[str, str]] = [
     ("nordic sales lead",             "ae"),
     ("inside sales executive",        "ae"),
 
+    # AM Lead / Director (check before generic AM catch-all)
+    ("account management team lead",    "am_lead"),
+    ("head of account management",      "am_lead"),
+    ("director of account management",  "am_lead"),
+    ("account management director",     "am_lead"),
+
     # AM variants
     ("senior account manager", "am"),
     ("account manager",        "am"),
+    ("account manager ii",     "am"),
 
     # CS Director (check before team lead and generic catch-all)
     ("climate strategy director",          "cs_director"),
@@ -92,7 +99,7 @@ def _determine_role(title) -> str:
 
 
 # Roles that have a registered commission plan (mirrors PLAN_REGISTRY keys).
-_COMMISSIONED_ROLES: set[str] = {"sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae"}
+_COMMISSIONED_ROLES: set[str] = {"sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae", "am", "am_lead"}
 
 # When a commissioned employee transitions to a new commissioned role part-way
 # through Q1 of the fiscal year, we split them into two plan periods so Q1

@@ -642,6 +642,7 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         compute_cs_nrr, compute_cs_lead_nrr, compute_cs_lead_multi_year_acv,
         compute_cs_director_nrr, compute_cs_director_multi_year_acv,
     )
+    from src.am_nrr_loader import compute_am_nrr, compute_am_lead_nrr, compute_am_multi_year_acv
     employees_safe = employees_df if employees_df is not None else pd.DataFrame()
 
     # ---- NRR: individual CSAs ----
@@ -808,8 +809,26 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
                     team_cr_detail["employee_id"] = lead_id
                     credits_detail = pd.concat([credits_detail, team_cr_detail], ignore_index=True)
 
+    # ---- AM NRR: individual AMs ----
+    print("[Pipeline] AM: computing NRR from Book of Business + InputData...")
+    am_nrr, am_nrr_breakdown = compute_am_nrr(data_dir, employees_safe)
+
+    # ---- AM NRR: lead/director aggregate (all AM accounts) ----
+    print("[Pipeline] AM: computing lead/director aggregate NRR...")
+    am_lead_nrr, am_lead_nrr_bkd = compute_am_lead_nrr(data_dir, employees_safe)
+    if not am_lead_nrr.empty:
+        am_nrr = pd.concat([am_nrr, am_lead_nrr], ignore_index=True)
+    if not am_lead_nrr_bkd.empty:
+        am_nrr_breakdown = pd.concat([am_nrr_breakdown, am_lead_nrr_bkd], ignore_index=True)
+
+    # ---- AM multi-year ACV (all am / am_lead employees) ----
+    print("[Pipeline] AM: computing multi-year ACV...")
+    am_multi_year_acv = compute_am_multi_year_acv(data_dir, employees_safe)
+
+    am_nrr_targets = _read("am_nrr_targets.csv")
+
     # Normalise year/quarter columns
-    for df in (nrr,):
+    for df in (nrr, am_nrr):
         if not df.empty:
             for col in ("year", "quarter"):
                 if col in df.columns:
@@ -818,6 +837,10 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
     if not nrr_targets.empty:
         nrr_targets["year"]           = pd.to_numeric(nrr_targets["year"],           errors="coerce").astype("Int64")
         nrr_targets["nrr_target_pct"] = pd.to_numeric(nrr_targets["nrr_target_pct"], errors="coerce")
+
+    if not am_nrr_targets.empty:
+        am_nrr_targets["year"]           = pd.to_numeric(am_nrr_targets["year"],           errors="coerce").astype("Int64")
+        am_nrr_targets["nrr_target_pct"] = pd.to_numeric(am_nrr_targets["nrr_target_pct"], errors="coerce")
 
     return {
         "nrr":                    nrr,
@@ -829,6 +852,10 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         "credits_detail":         credits_detail,
         "referrals":              referrals,
         "cs_lead_multi_year_acv": cs_lead_multi_year_acv,
+        "am_nrr":                 am_nrr,
+        "am_nrr_breakdown":       am_nrr_breakdown,
+        "am_nrr_targets":         am_nrr_targets,
+        "am_multi_year_acv":      am_multi_year_acv,
     }
 
 
