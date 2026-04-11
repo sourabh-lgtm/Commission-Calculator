@@ -20,7 +20,7 @@ from src.reports import (
     team_overview, sdr_detail, monthly_summary,
     quarterly_summary, commission_workings,
     employee_list, available_months, org_chart,
-    payroll_summary, accrual_summary,
+    payroll_summary, accrual_summary, accrual_vs_payroll,
     cs_overview, cs_quarterly,
     ae_overview, ae_detail, ae_monthly,
     am_overview, am_quarterly,
@@ -263,6 +263,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/accrual_summary":
             yr = int(_p("year", pd.Timestamp.now().year))
             self._respond(accrual_summary(MODEL, yr))
+            return
+
+        if path == "/api/accrual_vs_payroll":
+            yr = int(_p("year", pd.Timestamp.now().year))
+            self._respond(accrual_vs_payroll(MODEL, yr))
             return
 
         if path == "/api/export_payroll":

@@ -1,6 +1,6 @@
 # Commission Calculator — Architecture & Navigation Reference
 
-> Living document. Last updated: 2026-04-11 (SE commission plan implemented: dashboard, PDF, accruals, payroll). See `COMMISSION_PLANS.md` for full rate tables, formulas, and payout tiers.
+> Living document. Last updated: 2026-04-11 (Accruals vs Payroll tab; AE forecast payout parity with SDR; humaans date parsing fix; mid-month salary proration; Keagan Williams AM BoB). See `COMMISSION_PLANS.md` for full rate tables, formulas, and payout tiers.
 
 ---
 
@@ -36,6 +36,7 @@ Commission Calculator/
 |   +-- humaans_loader.py        # Humaans HR export parser; job title -> role mapping
 |   |                            #   load_humaans(data_dir) -> (employees_df, salary_history_df)
 |   |                            #   _TITLE_RULES — title pattern -> role string
+|   |                            #   Date parsing uses dayfirst=True (Humaans exports DD/MM/YYYY)
 |   +-- closed_won_commission.py # ACV commission rows from InputData.csv + NetSuite invoices
 |   |                            #   build_closed_won_commission() -> SDR/AM closed-won DataFrame
 |   |                            #   build_ae_closed_won_commission() -> AE closed-won DataFrame
@@ -102,7 +103,8 @@ Commission Calculator/
 |   |   +-- am.py                # am_overview, am_quarterly
 |   |   +-- se.py                # se_overview, se_quarterly, se_detail
 |   |   `-- shared.py            # commission_workings, payroll_summary, accrual_summary,
-|   |                            #   employee_list, available_months
+|   |                            #   accrual_vs_payroll, employee_list, available_months
+|   |                            #   _prorated_salary(sal_hist, m) — mid-month start helper
 |   |
 |   +-- pdf/
 |   |   +-- __init__.py          # Re-exports generate_statement()
@@ -243,13 +245,19 @@ class CommissionModel:
                                    #   CS/CS Lead:  "nrr", "nrr_breakdown", "nrr_targets",
                                    #                "csat_sent", "csat_scores",
                                    #                "credits", "credits_detail",
-                                   #                "referrals", "cs_lead_multi_year_acv",
-                                   #                "cs_director_multi_year_acv"
+                                   #                "referrals",
+                                   #                "cs_lead_multi_year_acv"
+                                   #                  (contains BOTH cs_lead + cs_director
+                                   #                   multi-year ACV merged into one DF)
                                    #   AM/AM Lead:  "am_nrr", "am_nrr_breakdown",
                                    #                "am_nrr_targets", "am_multi_year_acv"
-                                   #   AE:          "ae_closed_won", "ae_targets"
+                                   #   AE:          "ae_closed_won", "ae_targets",
+                                   #                "ae_ramp_report"
                                    #   SDR Lead:    "sdr_closed_won", "sdr_lead_targets"
-                                   #   Shared:      "fx_rates", "employees"
+                                   #   SE:          "se_targets", "se_actual",
+                                   #                "se_nb_acv", "se_arr"
+                                   #   Shared:      "fx_rates", "employees",
+                                   #                "salary_history"
                                    # Empty DataFrames if optional files absent (graceful degradation)
 ```
 
@@ -302,6 +310,7 @@ PLAN_REGISTRY = {
 | `GET /` | Serves the entire SPA as a single HTML page |
 | `GET /api/months` | List of active months |
 | `GET /api/employees` | List of commissioned employees |
+| `GET /api/org_chart` | Employee org chart (all employees with manager relationships) |
 | `GET /api/team_overview?month=YYYY-MM-DD` | All employees for a month with KPIs |
 | `GET /api/sdr_detail?employee_id=&month=` | One employee's commission breakdown |
 | `GET /api/monthly_summary?month=` | Monthly totals per employee |
@@ -322,6 +331,7 @@ PLAN_REGISTRY = {
 | `GET /api/preview_pdf?employee_id=&month=` | Generate and stream PDF statement |
 | `GET /api/payroll_summary?year=` | Finance payroll summary |
 | `GET /api/accrual_summary?year=` | Finance accruals summary |
+| `GET /api/accrual_vs_payroll?year=` | Accrual vs actual/forecast payroll per employee by dept (all EUR) |
 | `GET /api/export_payroll?year=` | Download Payroll Excel workbook |
 | `GET /api/export_accrual?year=` | Download Accruals Excel workbook |
 
@@ -411,7 +421,8 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 | Employee missing from dashboard entirely | `src/humaans_loader.py` | `_TITLE_RULES` — does their job title match a commissioned role? |
 | Employee has wrong role | `src/humaans_loader.py` | `_TITLE_RULES` pattern ordering; check Humaans title exactly |
 | Plan dates wrong (employee getting commission before/after tenure) | `src/humaans_loader.py` | `load_humaans()` — plan_start_date logic (first date they held the role) |
-| Salary wrong for CS/AM bonus | `src/humaans_loader.py` | salary_history parsing; check effective_date order |
+| Salary wrong for CS/AM bonus | `src/humaans_loader.py` | salary_history parsing; check effective_date order; dates must be DD/MM/YYYY (dayfirst=True) |
+| Employee salary shows 0 accrual for join month | `src/reports/shared.py` | `_prorated_salary()` — uses month-end comparison so mid-month effective dates are included and prorated |
 | Manager CC on emails wrong | `src/humaans_loader.py` | `_resolve_manager()` — matches manager email to employee_id |
 | **SAO / SDR data** | | |
 | Wrong SAO count for SDR | `src/loader.py` | `load_sao_commission_data()` — 6-month account deduplication |
@@ -423,7 +434,7 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 | SDR accelerator amount wrong | `src/commission_plans/sdr.py` | Top-up = excess SAOs x (accelerator_rate - outbound_rate) — not full replacement rate |
 | SDR closed-won commission missing | `src/closed_won_commission.py` | `build_closed_won_commission()` — check InputData + InvoiceSearch join; is_forecast flag |
 | **AE commission** | | |
-| AE commission not appearing | `src/commission_plans/ae.py` | Q4-only true-up; check `ae_targets.csv` has row for employee + year |
+| AE commission not appearing | `src/commission_plans/ae.py` | Quarterly payout; check `ae_targets.csv` has row for employee + year; check gate met (50% of quarterly target); confirm deals are invoiced (not forecast) |
 | AE gate failing unexpectedly | `src/commission_plans/ae.py` | `calculate_quarterly_accelerator()` — gate = 50% of `quarterly_target_eur` |
 | AE multi-year bonus wrong | `src/commission_plans/ae.py` | Multi-year ACV is year-2+ portion; check InputData contract duration fields |
 | AE accelerator tier wrong | `src/commission_plans/ae.py` | Tiers: 12% at 100-150%, 15% above 150% of annual_target_eur |
@@ -478,4 +489,5 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 | Wrong employees CC'd on email | `src/email_sender.py` | `build_cc_list()` — uses `role=cfo` and `role=sales_director` from employees |
 | **Excel export** | | |
 | Employee missing from payroll workbook | `export_excel.py` | `export_payroll_workbook()` — check role is included in the sheet logic |
-| Accrual amounts wrong | `src/reports/shared.py` | `accrual_summary()` — CS uses `salary_monthly * 0.15` regardless of actual performance |
+| Accrual amounts wrong | `src/reports/shared.py` | `accrual_summary()` — CS uses `salary_monthly * 0.15`, AM/SE use `* 0.20`, all prorated for mid-month joins via `_prorated_salary()` |
+| Accruals vs Payroll tab empty | `src/reports/shared.py` + `launch.py` | `accrual_vs_payroll()` — requires active months for selected year; check `/api/accrual_vs_payroll?year=` returns departments |

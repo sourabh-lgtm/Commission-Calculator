@@ -4,6 +4,29 @@ from src.helpers import df_to_records, get_fx_rate
 from src.commission_plans import get_plan
 
 
+def _prorated_salary(sal_hist: pd.DataFrame, m: pd.Timestamp) -> float:
+    """Return the monthly salary for month m, prorated for mid-month starts.
+
+    sal_hist must already be filtered to a single employee.
+    Uses the most-recent salary effective on or before the last day of m.
+    If the effective_date falls inside the month (e.g. joined on the 2nd),
+    the amount is scaled by (days active / total days in month).
+    """
+    month_end = (m + pd.offsets.MonthEnd(0)).normalize()
+    eligible  = sal_hist[sal_hist["effective_date"] <= month_end].sort_values(
+        "effective_date", ascending=False
+    )
+    if eligible.empty:
+        return 0.0
+    eff = pd.Timestamp(eligible.iloc[0]["effective_date"]).normalize()
+    sal = float(eligible.iloc[0]["salary_monthly"])
+    if eff > m.normalize():                          # mid-month start
+        days_in_month = month_end.day               # 28/29/30/31
+        days_active   = (month_end - eff).days + 1
+        return round(sal * days_active / days_in_month, 4)
+    return sal
+
+
 # ---------------------------------------------------------------------------
 # Commission workings: row-level audit trail
 # ---------------------------------------------------------------------------
@@ -284,11 +307,7 @@ def accrual_summary(model, year: int) -> dict:
 
         monthly = {}
         for m in year_months:
-            eligible = (
-                sal_hist[sal_hist["effective_date"] <= m]
-                .sort_values("effective_date", ascending=False)
-            )
-            sal_monthly = float(eligible["salary_monthly"].iloc[0]) if not eligible.empty else 0.0
+            sal_monthly = _prorated_salary(sal_hist, m)
             monthly[m.strftime("%Y-%m")] = round(sal_monthly * bonus_pct, 2)
 
         q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
@@ -423,11 +442,7 @@ def accrual_summary(model, year: int) -> dict:
 
         monthly = {}
         for m in year_months:
-            eligible = (
-                sal_hist[sal_hist["effective_date"] <= m]
-                .sort_values("effective_date", ascending=False)
-            )
-            sal_monthly = float(eligible["salary_monthly"].iloc[0]) if not eligible.empty else 0.0
+            sal_monthly = _prorated_salary(sal_hist, m)
             monthly[m.strftime("%Y-%m")] = round(sal_monthly * 0.20, 2)
 
         q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
@@ -486,11 +501,7 @@ def accrual_summary(model, year: int) -> dict:
 
         monthly = {}
         for m in year_months:
-            eligible = (
-                sal_hist[sal_hist["effective_date"] <= m]
-                .sort_values("effective_date", ascending=False)
-            )
-            sal_monthly = float(eligible["salary_monthly"].iloc[0]) if not eligible.empty else 0.0
+            sal_monthly = _prorated_salary(sal_hist, m)
             monthly[m.strftime("%Y-%m")] = round(sal_monthly * 0.20, 2)
 
         q_totals = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
@@ -539,6 +550,175 @@ def accrual_summary(model, year: int) -> dict:
         "months":       month_keys,
         "month_labels": month_labels,
         "regions":      [{"region": r, "rows": rows} for r, rows in regions.items()],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Accrual vs Payroll: per-employee quarterly comparison, grouped by department
+# ---------------------------------------------------------------------------
+
+def accrual_vs_payroll(model, year: int) -> dict:
+    """Compare quarterly accruals vs actual/forecast payroll per employee.
+
+    Accrual amounts follow the same logic as accrual_summary (primary rows only,
+    no employer contributions).  Payroll amounts are the actual commissions from
+    commission_detail.  Department and grand totals are converted to EUR.
+    """
+    all_months  = sorted(model.active_months)
+    year_months = [m for m in all_months if m.year == year]
+    if not year_months:
+        return {"year": year, "departments": [], "grand_total": {}}
+
+    df      = model.commission_detail[model.commission_detail["month"].isin(year_months)].copy()
+    cs_perf = getattr(model, "cs_performance", None)
+    fx_df   = cs_perf.get("fx_rates", pd.DataFrame()) if cs_perf else pd.DataFrame()
+    ae_tgts = cs_perf.get("ae_targets", pd.DataFrame()) if cs_perf else pd.DataFrame()
+
+    def _q(m):
+        return (m.month - 1) // 3 + 1
+
+    def _to_eur(amount, currency, month):
+        if currency == "EUR" or amount == 0:
+            return amount
+        if not fx_df.empty:
+            fx = get_fx_rate(fx_df, month, currency)
+            return round(amount / fx, 2) if fx else amount
+        return amount
+
+    def _accrual_monthly(emp_id, currency, role):
+        monthly = {}
+        if role in ("sdr", "sdr_lead"):
+            edf = df[df["employee_id"] == emp_id]
+            for m in year_months:
+                monthly[m] = round(float(edf[edf["month"] == m]["total_commission"].sum()), 2)
+        elif role in ("cs", "cs_lead", "cs_director"):
+            pct = 0.20 if role in ("cs_lead", "cs_director") else 0.15
+            sh  = model.salary_history[model.salary_history["employee_id"] == emp_id]
+            for m in year_months:
+                monthly[m] = round(_prorated_salary(sh, m) * pct, 2)
+        elif role == "ae":
+            target_eur = 0.0
+            if not ae_tgts.empty:
+                mask = (
+                    (ae_tgts["employee_id"].astype(str) == str(emp_id)) &
+                    (ae_tgts["year"].astype(int) == int(year))
+                )
+                t = ae_tgts[mask]
+                if not t.empty:
+                    target_eur = float(t["annual_target_eur"].iloc[0])
+            m_eur = target_eur * 0.10 / 12
+            for m in year_months:
+                fx = 1.0 if currency == "EUR" else (get_fx_rate(fx_df, m, currency) if not fx_df.empty else 1.0)
+                monthly[m] = round(m_eur * fx, 2)
+        elif role in ("am", "am_lead", "se"):
+            sh = model.salary_history[model.salary_history["employee_id"] == emp_id]
+            for m in year_months:
+                monthly[m] = round(_prorated_salary(sh, m) * 0.20, 2)
+        else:
+            for m in year_months:
+                monthly[m] = 0.0
+        return monthly
+
+    def _payroll_monthly(emp_id):
+        edf = df[df["employee_id"] == emp_id]
+        result = {}
+        for m in year_months:
+            row = edf[edf["month"] == m]
+            result[m] = round(float(row["total_commission"].iloc[0]), 2) if not row.empty else 0.0
+        return result
+
+    def _quarterly_local(monthly):
+        q = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+        for m, v in monthly.items():
+            q[_q(m)] += v
+        return {k: round(v, 2) for k, v in q.items()}
+
+    def _quarterly_eur(monthly, currency):
+        q = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+        for m, v in monthly.items():
+            q[_q(m)] += _to_eur(v, currency, m)
+        return {k: round(v, 2) for k, v in q.items()}
+
+    def _totals(q):
+        return {**{f"q{k}": q[k] for k in [1, 2, 3, 4]}, "total": round(sum(q.values()), 2)}
+
+    DEPARTMENTS = [
+        ("SDR \u2014 Sales Development",        ["sdr", "sdr_lead"]),
+        ("CS \u2014 Climate Strategy Advisors", ["cs", "cs_lead", "cs_director"]),
+        ("AE \u2014 Account Executives",        ["ae"]),
+        ("AM \u2014 Account Managers",          ["am", "am_lead"]),
+        ("SE \u2014 Solutions Engineers",       ["se"]),
+    ]
+
+    departments = []
+    grand_acc = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+    grand_pay = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+
+    for dept_name, roles in DEPARTMENTS:
+        emps = (
+            model.employees[model.employees["role"].isin(roles)]
+            .sort_values("plan_end_date", ascending=True, na_position="last")
+            .drop_duplicates(subset=["employee_id"], keep="last")
+            .copy()
+        )
+        if emps.empty:
+            continue
+
+        dept_acc = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+        dept_pay = {1: 0.0, 2: 0.0, 3: 0.0, 4: 0.0}
+        emp_rows = []
+
+        for _, emp in emps.iterrows():
+            emp_id   = emp["employee_id"]
+            currency = emp["currency"]
+            role     = emp["role"]
+
+            acc_m = _accrual_monthly(emp_id, currency, role)
+            pay_m = _payroll_monthly(emp_id)
+
+            acc_q_eur = _quarterly_eur(acc_m, currency)
+            pay_q_eur = _quarterly_eur(pay_m, currency)
+            del_q_eur = {k: round(acc_q_eur[k] - pay_q_eur[k], 2) for k in [1, 2, 3, 4]}
+
+            for k in [1, 2, 3, 4]:
+                dept_acc[k] = round(dept_acc[k] + acc_q_eur[k], 2)
+                dept_pay[k] = round(dept_pay[k] + pay_q_eur[k], 2)
+
+            emp_rows.append({
+                "employee_id":      str(emp_id),
+                "name":             emp["name"],
+                "role":             role,
+                "cost_center_code": emp.get("cost_center_code", ""),
+                "currency":         "EUR",
+                "accrual": _totals(acc_q_eur),
+                "payroll": _totals(pay_q_eur),
+                "delta":   _totals(del_q_eur),
+            })
+
+        dept_del = {k: round(dept_acc[k] - dept_pay[k], 2) for k in [1, 2, 3, 4]}
+        for k in [1, 2, 3, 4]:
+            grand_acc[k] = round(grand_acc[k] + dept_acc[k], 2)
+            grand_pay[k] = round(grand_pay[k] + dept_pay[k], 2)
+
+        departments.append({
+            "name":      dept_name,
+            "employees": emp_rows,
+            "dept_total": {
+                "accrual": _totals(dept_acc),
+                "payroll": _totals(dept_pay),
+                "delta":   _totals(dept_del),
+            },
+        })
+
+    grand_del = {k: round(grand_acc[k] - grand_pay[k], 2) for k in [1, 2, 3, 4]}
+    return {
+        "year": year,
+        "departments": departments,
+        "grand_total": {
+            "accrual": _totals(grand_acc),
+            "payroll": _totals(grand_pay),
+            "delta":   _totals(grand_del),
+        },
     }
 
 

@@ -77,6 +77,17 @@ SHARED_TABS_HTML = """
   <div id="ac-body"></div>
 </div>
 
+<!-- ============================================================ ACCRUAL VS PAYROLL (shared) -->
+<div id="tab-accrual-vs-payroll" class="tab-content">
+  <div class="page-title">Accruals vs Payroll</div>
+  <p class="page-sub">Quarterly accrual vs actual/forecast payroll per employee — delta highlights over/under-accrual</p>
+  <div class="controls">
+    <label>Year</label>
+    <select id="avp-year" onchange="loadAccrualVsPayroll()"></select>
+  </div>
+  <div id="avp-body"></div>
+</div>
+
 <!-- ============================================================ DATA VIEW (shared) -->
 <div id="tab-data-view" class="tab-content">
   <div class="page-title">Data</div>

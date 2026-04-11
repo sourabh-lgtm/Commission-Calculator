@@ -652,6 +652,88 @@ async function sendAccrual() {
   if (data.success) toast('\u2713 Accrual summary sent to ' + email); else toast('\u2717 Error: ' + data.error);
 }
 
+async function loadAccrualVsPayroll() {
+  const yr  = document.getElementById('avp-year').value;
+  const res = await fetch('/api/accrual_vs_payroll?year=' + yr);
+  const data = await res.json();
+  const el   = document.getElementById('avp-body');
+  if (!data.departments || !data.departments.length) {
+    el.innerHTML = '<div class="panel" style="color:var(--dim)">No data for selected year.</div>';
+    return;
+  }
+
+  const qs      = ['q1','q2','q3','q4','total'];
+  const qLabels = ['Q1','Q2','Q3','Q4','Total'];
+  const qBg     = ['#eef2ff','#f0fdf4','#fff7ed','#fdf4ff','#f5f5f5'];
+
+  function _buildThead() {
+    let r1 = '<tr><th rowspan="2" style="min-width:140px">Employee</th><th rowspan="2">Dept Code</th><th rowspan="2" style="text-align:right">Currency</th>';
+    qLabels.forEach((ql, i) => {
+      r1 += `<th colspan="3" style="text-align:center;background:${qBg[i]}">${ql}</th>`;
+    });
+    r1 += '</tr>';
+    let r2 = '<tr>';
+    qLabels.forEach(() => {
+      r2 += '<th style="text-align:right">Accrual</th><th style="text-align:right">Payroll</th><th style="text-align:right">Delta</th>';
+    });
+    r2 += '</tr>';
+    return r1 + r2;
+  }
+
+  function fmtDelta(v, cur) {
+    const f = fmtAmt(Math.abs(v), cur);
+    if (v > 0.005)  return '<span style="color:var(--green)">' + f + '</span>';
+    if (v < -0.005) return '<span style="color:var(--red)">(' + f + ')</span>';
+    return f;
+  }
+
+  function empRow(e) {
+    let c = '<td>' + e.name + '</td>';
+    c += '<td style="text-align:right">' + (e.cost_center_code || '') + '</td>';
+    c += '<td style="text-align:right">' + e.currency + '</td>';
+    qs.forEach(q => {
+      c += '<td style="text-align:right">'  + fmtAmt(e.accrual[q], e.currency) + '</td>';
+      c += '<td style="text-align:right">'  + fmtAmt(e.payroll[q], e.currency) + '</td>';
+      c += '<td style="text-align:right">'  + fmtDelta(e.delta[q], e.currency) + '</td>';
+    });
+    return '<tr>' + c + '</tr>';
+  }
+
+  function totalRow(label, t, isGrand) {
+    const style = isGrand
+      ? 'background:var(--card);border-top:3px solid var(--accent)'
+      : 'background:var(--card);border-top:2px solid var(--border)';
+    let c = '<td><strong>' + label + '</strong><br><small style="color:var(--dim);font-weight:normal">in EUR</small></td>';
+    c += '<td></td><td style="text-align:right">EUR</td>';
+    qs.forEach(q => {
+      c += '<td style="text-align:right"><strong>' + fmtAmt(t.accrual[q], 'EUR') + '</strong></td>';
+      c += '<td style="text-align:right"><strong>' + fmtAmt(t.payroll[q], 'EUR') + '</strong></td>';
+      c += '<td style="text-align:right"><strong>' + fmtDelta(t.delta[q], 'EUR') + '</strong></td>';
+    });
+    return '<tr style="' + style + '">' + c + '</tr>';
+  }
+
+  const thead = _buildThead();
+  let html = '';
+
+  for (const dept of data.departments) {
+    let tbody = dept.employees.map(empRow).join('');
+    tbody += totalRow(dept.name + ' \u2014 Total', dept.dept_total, false);
+    html += '<div class="panel" style="margin-bottom:20px"><h3>' + dept.name + '</h3>'
+          + '<div class="tbl-wrap"><table class="data-table"><thead>' + thead + '</thead><tbody>' + tbody + '</tbody></table></div>'
+          + '</div>';
+  }
+
+  const gt = data.grand_total;
+  const gtRow = totalRow('Company Total \u2014 All Departments', gt, true);
+  html += '<div class="panel" style="margin-bottom:20px;border:2px solid var(--accent)">'
+        + '<h3>Company Total</h3>'
+        + '<div class="tbl-wrap"><table class="data-table"><thead>' + thead + '</thead><tbody>' + gtRow + '</tbody></table></div>'
+        + '</div>';
+
+  el.innerHTML = html;
+}
+
 async function loadDataView() {
   const tbl = document.getElementById('dv-table').value;
   const month = months[months.length-1] || '';

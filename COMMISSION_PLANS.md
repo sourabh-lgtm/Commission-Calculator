@@ -1,7 +1,7 @@
 # Commission Plans — Rates, Formulas & Payout Tiers
 
 > This file documents the math behind every commission plan. For which file to edit, see `ARCHITECTURE.md`.
-> Last updated: 2026-04-11 (SE commission plan: dashboard, PDF, accruals, payroll; AM dashboard + PDF; OO product code filter for one-off services).
+> Last updated: 2026-04-11 (AE forecast parity; Accruals vs Payroll tab; mid-month salary proration; dayfirst fix; Keagan Williams BoB).
 
 ---
 
@@ -236,7 +236,7 @@ Finance accruals show `salary_monthly × 0.15` every month (full potential) rega
 
 ## AE Plan — Account Executives (src/commission_plans/ae.py)
 
-**Payout frequency**: Year-end (Q4 true-up only)  
+**Payout frequency**: Quarterly (booked to Mar / Jun / Sep / Dec)  
 **Role**: `ae`
 
 ### Commission Structure
@@ -257,12 +257,15 @@ Accelerators apply to **total annual ACV** regardless of quarterly gate status.
 
 ### Booking Pattern
 
-- `calculate_monthly()`: records ACV pipeline data but returns **zero commission amounts**.
-- `calculate_quarterly_accelerator()` is **active only in Q4**:
-  1. Sums all qualifying quarters' ACV (gate applied per quarter)
-  2. Applies 10% base + 1% multi-year
-  3. Applies accelerator tiers (12% / 15%) on total annual ACV
-  4. Books total as `accelerator_topup` to the Q4 (December) month row
+- `calculate_monthly()`: records ACV pipeline data per deal invoice month but returns **zero commission amounts**.
+- `calculate_quarterly_accelerator()` runs for **every quarter** (Q1–Q4):
+  1. Buckets deals into the quarter by **close date**
+  2. Checks the 50% gate on full committed deal ACV
+  3. Applies 10% base + 1% multi-year **on all rows (confirmed + forecast)** for that quarter — matching SDR behaviour
+  4. Books `base_commission + multi_year_commission` as `accelerator_topup` to the quarter-end month row
+  5. **At the final earning quarter only** (Q4 for full-year employees; earlier for leavers): also computes annual accelerator tiers (12% / 15%) on total annual ACV and adds them to `accelerator_topup`
+
+**Invoicing cadence**: a deal that closes in Q1 but is invoiced in Q2 will have an `is_forecast=True` row. Commission is earned on all rows — confirmed invoices and forecast alike (same as SDR). Gate check always uses the deal's close date.
 
 ### AE Ramp Plan (Q1 only)
 
@@ -499,7 +502,7 @@ Finance accruals show `salary_monthly × 0.20` every month (full potential) rega
 
 14. **Churned account credits excluded**: `_load_credits()` in `pipeline.py` cross-references InputData for Renewal Closed Lost in the same quarter. Period-specific: Q2 churn does not affect Q1 credits.
 
-15. **AE commission is year-end true-up**: no payout in Q1–Q3. Full year calculated in Q4, with quarterly gate applied per-quarter. Annual accelerators apply to total ACV.
+15. **AE commission is quarterly** (base 10% + multi-year 1% on all deals — confirmed + forecast — each quarter, matching SDR behaviour). Annual accelerators (12% / 15%) are added only at the final earning quarter (Q4 for full-year employees). Gate check always uses close date.
 
 16. **SDR Lead is team-only**: no individual deal commissions. Two weighted measures: 35% SAO count, 65% ACV, with tiered payout (0/50/75/100%).
 
@@ -510,3 +513,7 @@ Finance accruals show `salary_monthly × 0.20` every month (full potential) rega
 19. **SE bonus uses company-level metrics**: both measures (New Business ACV and ARR) are company-wide, not per-employee. Both SEs get the same payout tier for each measure; only the bonus amount differs due to different salaries. Both actuals are computed automatically from `InputData.csv` on every pipeline run — no manual data entry required.
 
 20. **SE payout is purely quarterly**: no year-end true-up mechanism in the calculation engine (the contract's "catch-up" language refers to payroll timing, not a separate calculation). 125% tier applies each quarter if achievement > 110%.
+
+21. **Mid-month salary proration** (`_prorated_salary()` in `src/reports/shared.py`): for employees who join mid-month, their accrual for that month is `salary_monthly × (days_active / days_in_month)`. Uses month-end (not month-start) as the boundary, so an employee joining on the 3rd of a 31-day month gets `29/31` of salary. Applies to CS, AM, AM Lead, and SE accruals.
+
+22. **Humaans date parsing**: `humaans_loader.py` reads dates with `dayfirst=True` to correctly parse DD/MM/YYYY format (e.g. `19/01/2026` is 19 January, not 1 July). Without this flag, dates with day > 12 coerce to NaT.

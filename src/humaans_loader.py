@@ -205,10 +205,12 @@ def load_humaans(data_dir: str) -> tuple[pd.DataFrame, pd.DataFrame]:
         "Cost center - Code":  "cost_center_code",
     })
 
-    # Parse dates
+    # Parse dates — Humaans exports in DD/MM/YYYY so dayfirst=True is required.
+    # Without it, dates like 19/01/2026 (month=19) coerce to NaT because pandas
+    # infers MM/DD/YYYY from the ambiguous 01/... rows that dominate the column.
     for col in ("role_eff_date", "salary_eff_date", "employment_start", "employment_end"):
         if col in raw.columns:
-            raw[col] = pd.to_datetime(raw[col], errors="coerce")
+            raw[col] = pd.to_datetime(raw[col], dayfirst=True, errors="coerce")
 
     raw["salary_amount"]   = pd.to_numeric(raw["salary_amount"], errors="coerce").fillna(0)
     raw["employee_id"]     = raw["employee_id"].astype(str).str.strip()

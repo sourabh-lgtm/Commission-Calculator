@@ -14,6 +14,7 @@ _NAV_LINKS = """
     <div class="tab" onclick="showTab('approve-send')">Approve &amp; Send</div>
     <div class="tab" onclick="showTab('payroll-summary')">Payroll Summary</div>
     <div class="tab" onclick="showTab('accrual-summary')">Finance Accruals</div>
+    <div class="tab" onclick="showTab('accrual-vs-payroll')">Accruals vs Payroll</div>
     <div class="tab" onclick="showTab('data-view')">Data</div>
 """
 
@@ -109,7 +110,7 @@ async function onRoleInit() {
 
   // Year selectors
   const curYr = new Date().getFullYear();
-  ['qs-year','ps-year','ac-year'].forEach(id => {
+  ['qs-year','ps-year','ac-year','avp-year'].forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
     [curYr-1, curYr, curYr+1].forEach(y => {
@@ -132,7 +133,8 @@ function loadTab(name) {
   else if (name === 'spif')               loadSPIFs();
   else if (name === 'approve-send')       loadApprovalStatus();
   else if (name === 'payroll-summary')    loadPayrollSummary();
-  else if (name === 'accrual-summary')    loadAccrualSummary();
+  else if (name === 'accrual-summary')      loadAccrualSummary();
+  else if (name === 'accrual-vs-payroll')   loadAccrualVsPayroll();
   else if (name === 'data-view')          loadDataView();
 }
 

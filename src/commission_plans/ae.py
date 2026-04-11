@@ -257,15 +257,11 @@ class AECommissionPlan(BaseCommissionPlan):
         # --- 50% gate (on full committed deal ACV) ---
         gate_met = q_acv_fy >= q_target_eur * QUARTERLY_GATE if q_target_eur > 0 else False
 
-        # Commission is earned only on confirmed (invoiced) rows.
-        # Forecast rows count toward attainment display but not toward this quarter's payout.
-        if "is_forecast" in q_data.columns:
-            q_confirmed = q_data[~q_data["is_forecast"]]
-        else:
-            q_confirmed = q_data  # no is_forecast column → treat all as confirmed
-
-        qualifying_acv_fy = float(q_confirmed["acv_eur"].sum())          if gate_met and not q_confirmed.empty else 0.0
-        qualifying_acv_my = float(q_confirmed["multi_year_acv_eur"].sum()) if gate_met and not q_confirmed.empty else 0.0
+        # Commission is earned on all rows — confirmed invoices and forecast alike.
+        # This mirrors SDR behaviour: uninvoiced deals count toward payout based on
+        # expected invoicing cadence splits, not just what has been invoiced so far.
+        qualifying_acv_fy = float(q_data["acv_eur"].sum())              if gate_met and not q_data.empty else 0.0
+        qualifying_acv_my = float(q_data["multi_year_acv_eur"].sum())   if gate_met and not q_data.empty else 0.0
 
         # --- Ramp plan evaluation (Q1 only for ramp AEs) ---
         # Criteria from ae_ramp_report.csv: pipeline ≥ 200k, self-gen ≥ 50%, solution design ≥ 7
