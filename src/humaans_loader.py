@@ -99,7 +99,7 @@ def _determine_role(title) -> str:
 
 
 # Roles that have a registered commission plan (mirrors PLAN_REGISTRY keys).
-_COMMISSIONED_ROLES: set[str] = {"sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae", "am", "am_lead"}
+_COMMISSIONED_ROLES: set[str] = {"sdr", "sdr_lead", "cs", "cs_lead", "cs_director", "ae", "am", "am_lead", "se"}
 
 # When a commissioned employee transitions to a new commissioned role part-way
 # through Q1 of the fiscal year, we split them into two plan periods so Q1

@@ -1,6 +1,6 @@
 # Commission Calculator — Architecture & Navigation Reference
 
-> Living document. Last updated: 2026-04-11 (AM dashboard + PDF implemented). See `COMMISSION_PLANS.md` for full rate tables, formulas, and payout tiers.
+> Living document. Last updated: 2026-04-11 (SE commission plan implemented: dashboard, PDF, accruals, payroll). See `COMMISSION_PLANS.md` for full rate tables, formulas, and payout tiers.
 
 ---
 
@@ -75,7 +75,7 @@ Commission Calculator/
 |   +-- commission_plans/
 |   |   +-- __init__.py          # get_plan(role) registry -> plan class or None
 |   |   |                        #   PLAN_REGISTRY = {sdr, cs, cs_lead, cs_director,
-|   |   |                        #                    ae, sdr_lead, am, am_lead}
+|   |   |                        #                    ae, sdr_lead, am, am_lead, se}
 |   |   +-- base.py              # BaseCommissionPlan ABC
 |   |   |                        #   calculate_monthly() — returns dict of components
 |   |   |                        #   calculate_quarterly_accelerator() — returns accelerator dict
@@ -88,8 +88,9 @@ Commission Calculator/
 |   |   +-- ae.py                # AECommissionPlan (10% base + 1% multi-yr + annual accelerators)
 |   |   +-- am.py                # AMCommissionPlan (20% salary; NRR 100%; multi-yr ACV; referrals)
 |   |   |                        #   Subclass of CSACommissionPlan (reuses NRR tier logic)
-|   |   `-- am_lead.py           # AMLeadCommissionPlan (team-aggregate NRR; else same as AM)
-|   |                            #   Subclass of AMCommissionPlan
+|   |   +-- am_lead.py           # AMLeadCommissionPlan (team-aggregate NRR; else same as AM)
+|   |   |                        #   Subclass of AMCommissionPlan
+|   |   `-- se.py                # SECommissionPlan (20% salary; NB ACV 80% + Company ARR 20%)
 |   |
 |   +-- reports/
 |   |   +-- __init__.py          # Re-exports all report functions
@@ -97,6 +98,7 @@ Commission Calculator/
 |   |   +-- cs.py                # cs_overview, cs_quarterly
 |   |   +-- ae.py                # ae_overview, ae_detail, ae_monthly
 |   |   +-- am.py                # am_overview, am_quarterly
+|   |   +-- se.py                # se_overview, se_quarterly
 |   |   `-- shared.py            # commission_workings, payroll_summary, accrual_summary,
 |   |                            #   employee_list, available_months
 |   |
@@ -108,6 +110,7 @@ Commission Calculator/
 |   |   +-- _cs.py               # CS/CS Lead/CS Director summary + workings pages
 |   |   +-- _am.py               # AM/AM Lead summary + workings pages
 |   |   +-- _ae.py               # AE summary + workings pages
+|   |   +-- _se.py               # SE summary + workings pages
 |   |   +-- _constants.py        # Page margins, fonts, colours
 |   |   `-- _helpers.py          # Shared drawing helpers
 |   |
@@ -124,9 +127,12 @@ Commission Calculator/
 |       +-- sdr.py               # SDR nav links, tab HTML, role JS
 |       +-- cs.py                # CS nav links, tab HTML, role JS
 |       +-- ae.py                # AE nav links, tab HTML, role JS
-|       `-- am.py                # AM nav links, tab HTML, role JS
+|       +-- am.py                # AM nav links, tab HTML, role JS
+|       |                        #   Tabs: Team Overview, Monthly Summary, Quarterly Performance,
+|       |                        #         Manager Detail, Bonus Workings, Approve & Send
+|       `-- se.py                # SE nav links, tab HTML, role JS
 |                                #   Tabs: Team Overview, Monthly Summary, Quarterly Performance,
-|                                #         Manager Detail, Bonus Workings, Approve & Send
+|                                #         SE Detail, Bonus Workings, Approve & Send
 |
 +-- data/                        # Input CSVs — gitignored (contains PII)
 |   +-- README.txt               # Column-level spec for every data file
@@ -148,6 +154,8 @@ Commission Calculator/
 |   +-- cs_referrals_report.csv  # Salesforce DCT referral report (CS + AM referrals)
 |   +-- am_book_of_business.csv  # AM Book of Business (one row per account per AM)
 |   +-- am_nrr_targets.csv       # Per-AM annual NRR targets
+|   +-- se_targets.csv           # SE quarterly targets: NB ACV + ARR (fixed from FY26 contract)
+|   +-- se_actual_performance.csv# SE actual results per quarter: finance fills in each quarter
 |   `-- approval_state.json      # Auto-managed approval state (delete to reset all)
 |
 +-- output/statements/           # Generated PDFs (gitignored)
@@ -261,7 +269,7 @@ class CommissionModel:
 | `Climate Strategy Director` (or similar) | `cs_director` | Yes (uses CSLeadCommissionPlan) |
 | `Senior/Associate Climate Strategy Advisor`, `Climate Strategy Advisor` | `cs` | Yes |
 | `Customer Success *` | `customer_success` | No |
-| `Solutions Engineer`, `Senior SE` | `se` | No |
+| `Solutions Engineer`, `Senior SE` | `se` | Yes (SECommissionPlan) |
 | `VP Revenue`, `VP Sales`, `Head of Sales` | `sales_director` | No — CC on emails |
 | `CFO`, `Chief Financial Officer` | `cfo` | No — CC on emails |
 | Everything else | `other` | No |
@@ -277,6 +285,7 @@ PLAN_REGISTRY = {
     "sdr_lead":    SDRLeadCommissionPlan,
     "am":          AMCommissionPlan,
     "am_lead":     AMLeadCommissionPlan,
+    "se":          SECommissionPlan,
 }
 ```
 

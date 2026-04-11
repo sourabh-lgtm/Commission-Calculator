@@ -1,7 +1,7 @@
 # Commission Plans — Rates, Formulas & Payout Tiers
 
 > This file documents the math behind every commission plan. For which file to edit, see `ARCHITECTURE.md`.
-> Last updated: 2026-04-11 (AM dashboard + PDF; OO product code filter for one-off services).
+> Last updated: 2026-04-11 (SE commission plan: dashboard, PDF, accruals, payroll; AM dashboard + PDF; OO product code filter for one-off services).
 
 ---
 
@@ -392,6 +392,73 @@ Structurally identical to AM, with one difference:
 
 ---
 
+## SE Plan — Solutions Engineers (src/commission_plans/se.py)
+
+**Payout frequency**: Quarterly (booked to Mar / Jun / Sep / Dec)  
+**Role**: `se`  
+**Employees**: Kathleen Howard (Sweden/SEK), Polly (UK/GBP)
+
+### Annual Bonus Base
+
+| Role | Annual Bonus % | Quarterly Target Formula |
+|---|---|---|
+| `se` | 20% | `salary_monthly × 12 × 0.20 / 4` |
+
+Salary comes from `salary_history` — prorated if salary changes mid-quarter.
+
+### Two Measures
+
+| Measure | Weight | Description |
+|---|---|---|
+| Global New Business ACV | 80% | Company-wide new business closed in the quarter vs quarterly target |
+| Company Closing ARR | 20% | Company total ARR at quarter end vs quarterly target |
+
+### Quarterly Targets (fixed in contract)
+
+| Quarter | New Business Target (EUR) | ARR Target (EUR) |
+|---------|--------------------------|------------------|
+| Q1 | €568,000 | €11,116,000 |
+| Q2 | €590,000 | €11,825,000 |
+| Q3 | €641,000 | €12,464,000 |
+| Q4 | €748,000 | €13,240,000 |
+
+### Payout Tiers (identical for both measures)
+
+| Achievement | Payout fraction |
+|---|---|
+| >= 110% | 125% |
+| 100–110% | 100% |
+| 85–99.99% | 90% |
+| 70–84.99% | 75% |
+| 50–69.99% | 50% |
+| < 50% | 0% |
+
+### Formula
+
+```
+quarterly_bonus_target = salary_monthly × 12 × 0.20 / 4
+nb_achievement   = actual_new_business_acv / new_business_target × 100
+arr_achievement  = actual_company_arr / arr_target × 100
+nb_bonus  = quarterly_bonus_target × 0.80 × tier_payout(nb_achievement)
+arr_bonus = quarterly_bonus_target × 0.20 × tier_payout(arr_achievement)
+total     = nb_bonus + arr_bonus
+```
+
+### Data Sources
+
+| Source | File | Key columns |
+|---|---|---|
+| Quarterly targets | `data/se_targets.csv` | `year`, `quarter`, `new_business_target_eur`, `arr_target_eur` |
+| Actual performance | `data/se_actual_performance.csv` | `year`, `quarter`, `new_business_acv_eur`, `company_arr_eur` |
+
+Finance enters actuals in `se_actual_performance.csv` each quarter. Targets are fixed from the signed FY26 contract.
+
+### Accruals
+
+Finance accruals show `salary_monthly × 0.20` every month (full potential) regardless of actual performance. Actual bonus appears only in the quarter-end month rows.
+
+---
+
 ## Key Business Rules
 
 1. **Currency**: commissions are in local currency (SEK/GBP/EUR). ACV stored in EUR; FX from `fx_rates.csv` applied at calculation time. `get_fx_rate()` in `helpers.py`.
@@ -429,3 +496,7 @@ Structurally identical to AM, with one difference:
 17. **cs_director uses CSLeadCommissionPlan**: same plan, same calculation. The distinction is purely in the job title -> role mapping in Humaans.
 
 18. **AM Lead team aggregate**: `compute_am_lead_nrr()` pools all accounts across all AMs (identified by am/am_lead role) for the lead's NRR score.
+
+19. **SE bonus uses company-level metrics**: both measures (New Business ACV and ARR) are company-wide, not per-employee. Both SEs get the same payout tier for each measure; only the bonus amount differs due to different salaries. Finance enters actuals quarterly in `se_actual_performance.csv`.
+
+20. **SE payout is purely quarterly**: no year-end true-up mechanism in the calculation engine (the contract's "catch-up" language refers to payroll timing, not a separate calculation). 125% tier applies each quarter if achievement > 110%.

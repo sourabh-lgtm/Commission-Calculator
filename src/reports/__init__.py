@@ -2,6 +2,7 @@ from src.reports.sdr import team_overview, sdr_detail, monthly_summary, quarterl
 from src.reports.cs import cs_overview, cs_quarterly
 from src.reports.ae import ae_overview, ae_detail, ae_monthly
 from src.reports.am import am_overview, am_quarterly
+from src.reports.se import se_overview, se_quarterly
 from src.reports.shared import (
     commission_workings, payroll_summary, accrual_summary,
     employee_list, available_months, org_chart,
@@ -12,6 +13,7 @@ __all__ = [
     "cs_overview", "cs_quarterly",
     "ae_overview", "ae_detail", "ae_monthly",
     "am_overview", "am_quarterly",
+    "se_overview", "se_quarterly",
     "commission_workings", "payroll_summary", "accrual_summary",
     "employee_list", "available_months", "org_chart",
 ]

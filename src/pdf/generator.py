@@ -11,6 +11,7 @@ from src.pdf._sdr import _summary_page, _workings_page
 from src.pdf._cs import _cs_summary_page, _cs_workings_page
 from src.pdf._ae import _ae_summary_page, _ae_workings_page
 from src.pdf._am import _am_summary_page, _am_workings_page
+from src.pdf._se import _se_summary_page, _se_workings_page
 
 
 def generate_statement(
@@ -55,6 +56,8 @@ def generate_statement(
         story.extend(_am_summary_page(employee, period_label, summary, currency))
     elif role == "ae":
         story.extend(_ae_summary_page(employee, period_label, summary, accelerator, currency))
+    elif role == "se":
+        story.extend(_se_summary_page(employee, period_label, summary, currency))
     else:
         story.extend(_summary_page(employee, period_label, summary, accelerator, currency))
     story.append(PageBreak())
@@ -68,6 +71,8 @@ def generate_statement(
         story.extend(_am_workings_page(employee, period_label, workings_rows, summary, currency))
     elif role == "ae":
         story.extend(_ae_workings_page(employee, period_label, workings_rows, accelerator, currency))
+    elif role == "se":
+        story.extend(_se_workings_page(employee, period_label, workings_rows, summary, currency))
     else:
         story.extend(_workings_page(employee, period_label, workings_rows, currency))
 

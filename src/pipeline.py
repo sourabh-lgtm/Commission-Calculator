@@ -51,6 +51,7 @@ def run_pipeline(data_dir: str) -> CommissionModel:
     model.cs_performance["ae_ramp_report"]   = data.get("ae_ramp_report", pd.DataFrame())
     model.cs_performance["fx_rates"]         = model.fx_rates
     model.cs_performance["employees"]        = model.employees  # for SDR lead manager filtering
+    model.cs_performance["salary_history"]   = model.salary_history  # for SE workings rows
 
     # ------------------------------------------------------------------
     # Stage 2: Build activity calendar (all months present in activity data)
@@ -827,6 +828,16 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
 
     am_nrr_targets = _read("am_nrr_targets.csv")
 
+    # ---- SE: load quarterly targets and actual performance ----
+    print("[Pipeline] SE: loading targets and actual performance...")
+    se_targets = _read("se_targets.csv")
+    se_actual  = _read("se_actual_performance.csv")
+    for df in (se_targets, se_actual):
+        if not df.empty:
+            for col in ("year", "quarter"):
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
     # Normalise year/quarter columns
     for df in (nrr, am_nrr):
         if not df.empty:
@@ -856,6 +867,8 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         "am_nrr_breakdown":       am_nrr_breakdown,
         "am_nrr_targets":         am_nrr_targets,
         "am_multi_year_acv":      am_multi_year_acv,
+        "se_targets":             se_targets,
+        "se_actual":              se_actual,
     }
 
 

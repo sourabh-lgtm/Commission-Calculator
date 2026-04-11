@@ -5,6 +5,7 @@ from src.commission_plans.ae import AECommissionPlan
 from src.commission_plans.sdr_lead import SDRLeadCommissionPlan
 from src.commission_plans.am import AMCommissionPlan
 from src.commission_plans.am_lead import AMLeadCommissionPlan
+from src.commission_plans.se import SECommissionPlan
 
 PLAN_REGISTRY = {
     "sdr":         SDRCommissionPlan,
@@ -15,8 +16,8 @@ PLAN_REGISTRY = {
     "sdr_lead":    SDRLeadCommissionPlan,
     "am":          AMCommissionPlan,
     "am_lead":     AMLeadCommissionPlan,
+    "se":          SECommissionPlan,
     # Future roles:
-    # "se": SECommissionPlan,
     # "manager": ManagerCommissionPlan,
 }
 
