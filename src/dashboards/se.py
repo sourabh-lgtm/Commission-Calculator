@@ -254,7 +254,7 @@ async function loadSEIndividual() {
   const empId = document.getElementById('se-ind-emp').value;
   if (!empId) return;
 
-  const res  = await fetch('/api/sdr_detail?employee_id=' + empId);
+  const res  = await fetch('/api/se_detail?employee_id=' + empId);
   const data = await res.json();
   const {employee: emp, rows, ytd_commission} = data;
   const cur = emp.currency || 'EUR';

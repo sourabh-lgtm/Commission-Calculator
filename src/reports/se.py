@@ -84,3 +84,37 @@ def se_quarterly(model, year: int, quarter: int) -> dict:
         emp_rows.append(row)
 
     return {"employees": emp_rows, "year": year, "quarter": quarter}
+
+
+def se_detail(model, employee_id: str) -> dict:
+    if model.commission_detail.empty:
+        return {"rows": [], "employee": {}, "ytd_commission": 0}
+
+    df = model.commission_detail[
+        model.commission_detail["employee_id"] == employee_id
+    ].copy()
+
+    emp_row = model.employees[model.employees["employee_id"] == employee_id]
+    employee = emp_row.iloc[0].to_dict() if not emp_row.empty else {}
+
+    rows = []
+    for _, r in df.sort_values("month").iterrows():
+        rows.append({
+            "month":                  r["month"].strftime("%Y-%m") if hasattr(r["month"], "strftime") else str(r["month"]),
+            "quarter":                r.get("quarter", ""),
+            "currency":               r.get("currency", ""),
+            "fx_rate":                r.get("fx_rate", 1),
+            "quarterly_bonus_target": round(float(r.get("quarterly_bonus_target", 0) or 0), 2),
+            "nb_achievement_pct":     round(float(r.get("nb_achievement_pct", 0) or 0), 2),
+            "nb_bonus":               round(float(r.get("nb_bonus", 0) or 0), 2),
+            "arr_achievement_pct":    round(float(r.get("arr_achievement_pct", 0) or 0), 2),
+            "arr_bonus":              round(float(r.get("arr_bonus", 0) or 0), 2),
+            "total_commission":       round(float(r.get("total_commission", 0) or 0), 2),
+        })
+
+    ytd_total = round(float(df["total_commission"].sum()), 2)
+    return {
+        "employee":       {k: str(v) if isinstance(v, pd.Timestamp) else v for k, v in employee.items()},
+        "rows":           rows,
+        "ytd_commission": ytd_total,
+    }

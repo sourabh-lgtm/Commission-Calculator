@@ -10,6 +10,7 @@ def _role_options_html(selected_role: str) -> str:
         ("cs",  "Climate Strategy Advisor"),
         ("ae",  "Account Executive"),
         ("am",  "Account Manager"),
+        ("se",  "Solutions Engineer"),
     ]
     return "".join(
         f'<option value="{v}"{" selected" if v == selected_role else ""}>{label}</option>'

@@ -98,7 +98,7 @@ Commission Calculator/
 |   |   +-- cs.py                # cs_overview, cs_quarterly
 |   |   +-- ae.py                # ae_overview, ae_detail, ae_monthly
 |   |   +-- am.py                # am_overview, am_quarterly
-|   |   +-- se.py                # se_overview, se_quarterly
+|   |   +-- se.py                # se_overview, se_quarterly, se_detail
 |   |   `-- shared.py            # commission_workings, payroll_summary, accrual_summary,
 |   |                            #   employee_list, available_months
 |   |
@@ -309,6 +309,9 @@ PLAN_REGISTRY = {
 | `GET /api/cs_quarterly?year=&quarter=` | CS quarterly detail |
 | `GET /api/am_overview?month=` | AM team overview (NRR, multi-year ACV, referrals) |
 | `GET /api/am_quarterly?year=&quarter=` | AM quarterly detail |
+| `GET /api/se_overview?month=` | SE team overview + bonus breakdown |
+| `GET /api/se_quarterly?year=&quarter=` | SE quarterly detail |
+| `GET /api/se_detail?employee_id=` | One SE's full-year monthly commission breakdown |
 | `GET /api/ae_overview?year=&quarter=` | AE pipeline + attainment for a quarter |
 | `GET /api/ae_detail?employee_id=&year=&quarter=` | One AE's quarterly commission detail |
 | `GET /api/ae_monthly?employee_id=&month=` | One AE's monthly deal workings |

@@ -18,6 +18,7 @@ PLAN_REGISTRY = {
     "sdr_lead":    SDRLeadCommissionPlan,      # src/commission_plans/sdr_lead.py
     "am":          AMCommissionPlan,           # src/commission_plans/am.py
     "am_lead":     AMLeadCommissionPlan,       # src/commission_plans/am_lead.py
+    "se":          SECommissionPlan,           # src/commission_plans/se.py
 }
 ```
 
@@ -452,6 +453,14 @@ total     = nb_bonus + arr_bonus
 | Actual performance | `data/se_actual_performance.csv` | `year`, `quarter`, `new_business_acv_eur`, `company_arr_eur` |
 
 Finance enters actuals in `se_actual_performance.csv` each quarter. Targets are fixed from the signed FY26 contract.
+
+### Report Functions
+
+| Function | Endpoint | Description |
+|---|---|---|
+| `se_overview(model, month)` | `GET /api/se_overview?month=` | Team overview — both SEs, bonus breakdown per month |
+| `se_quarterly(model, year, quarter)` | `GET /api/se_quarterly?year=&quarter=` | Quarterly rollup — summed bonuses + achievement % |
+| `se_detail(model, employee_id)` | `GET /api/se_detail?employee_id=` | Full-year monthly breakdown for one SE (all months, quarter-end months show bonus) |
 
 ### Accruals
 

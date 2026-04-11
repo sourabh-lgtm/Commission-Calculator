@@ -24,7 +24,7 @@ from src.reports import (
     cs_overview, cs_quarterly,
     ae_overview, ae_detail, ae_monthly,
     am_overview, am_quarterly,
-    se_overview, se_quarterly,
+    se_overview, se_quarterly, se_detail,
 )
 from src.approval_state import ApprovalState
 from src.helpers import clean_json
@@ -175,6 +175,11 @@ class Handler(BaseHTTPRequestHandler):
             yr = int(_p("year", pd.Timestamp.now().year))
             qt = int(_p("quarter", 1))
             self._respond(se_quarterly(MODEL, yr, qt))
+            return
+
+        if path == "/api/se_detail":
+            emp_id = _p("employee_id", "")
+            self._respond(se_detail(MODEL, emp_id))
             return
 
         if path == "/api/commission_workings":
