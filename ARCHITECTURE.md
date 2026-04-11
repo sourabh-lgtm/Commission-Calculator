@@ -51,7 +51,7 @@ Commission Calculator/
 |   |                            #   compute_am_lead_nrr()    — team-aggregate NRR
 |   |                            #   compute_am_multi_year_acv() — multi-year ACV for AMs
 |   |                            #   BoB col 18 (index 18) = "Account Owner 2026" column
-|   |                            #   One-off services = 20% of Non-Recurring TCV (vs 50% for CS)
+|   |                            #   One-off services = 50% of Non-Recurring TCV (same as CS)
 |   +-- spif.py                  # SPIF award calculation (Q1 2026)
 |   |                            #   calculate_sdr_spif()   — 8-week window between SAO and close
 |   |                            #   calculate_ae_spif()    — first AE to hit Q1 target

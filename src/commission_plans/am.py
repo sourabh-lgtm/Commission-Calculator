@@ -16,8 +16,8 @@ Referral commissions (same rates as CSA):
   Active referral (outbound): EUR 115 / GBP 100 / SEK 1,300 per SAO + 5% ACV CW
   Inbound referral:           EUR  55 / GBP  47 / SEK   590 per SAO + 1% ACV CW
 
-One-off services (Professional Services): 20% of Non-Recurring TCV included
-in the NRR numerator -- no separate payment.
+One-off services (Professional Services): 50% of Non-Recurring TCV included
+in the NRR numerator -- same as CS plan, no separate payment.
 """
 
 import pandas as pd
@@ -320,7 +320,7 @@ class AMCommissionPlan(CSACommissionPlan):
                 net        = add_on + one_off + upsell_dwn + churn
                 parts = []
                 if add_on:     parts.append(f"Add-on: {add_on:+,.0f}")
-                if one_off:    parts.append(f"One-off svc (20%): {one_off:+,.0f}")
+                if one_off:    parts.append(f"One-off svc (50%): {one_off:+,.0f}")
                 if upsell_dwn: parts.append(f"Renewal \u0394: {upsell_dwn:+,.0f}")
                 if churn:      parts.append(f"Churn: {churn:+,.0f}")
                 acct_rows_list.append({

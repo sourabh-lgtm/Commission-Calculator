@@ -348,7 +348,7 @@ Targets from `am_nrr_targets.csv` (columns: `employee_id`, `year`, `nrr_target_p
 NRR = (ARR + add_ons + one_off + upsell_downsell + churn) / ARR × 100
 ```
 
-**Key difference from CS**: one-off services = **20%** of Non-Recurring TCV (CS gets 50%).
+**Key difference from CS**: none for one-off services — both CS and AM use **50%** of Non-Recurring TCV.
 
 **BoB column indices** (am_book_of_business.csv):
 - Index 5 = Account Name
@@ -416,7 +416,7 @@ Structurally identical to AM, with one difference:
 
 11. **Plan window enforcement**: `plan_start_date`/`plan_end_date` from Humaans ensure employees only get commission for months they were in the role.
 
-12. **One-off services split**: Add-On deals with Non-Recurring TCV → CSA gets 50%, AM gets 20%. The other shares are not modelled (rest is business margin). Visible in NRR workings as "One-off svc (50%)" or "One-off svc (20%)".
+12. **One-off services split**: Add-On deals with Non-Recurring TCV → both CSA and AM get **50%** included in their NRR numerator. The other 50% is business margin and not modelled. Visible in NRR workings as "One-off svc (50%)".
 
 13. **Multi-year ACV requires CS ownership** (CS plan): CS leads only earn multi-year ACV commission when the Opportunity Owner is a CS employee. AM/AE-owned deals excluded.
 

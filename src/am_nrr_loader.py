@@ -1,9 +1,9 @@
 """Calculate NRR for each AM from Book of Business + InputData.
 
 NRR formula:
-    NRR = (Add_Ons + One_Off_20pct + Upsell + Downsell + Churn + Total_ARR) / Total_ARR * 100
+    NRR = (Add_Ons + One_Off_50pct + Upsell + Downsell + Churn + Total_ARR) / Total_ARR * 100
 
-One-off services: 20% of Non-Recurring TCV on Add-On deals (per AM commission plan).
+One-off services: 50% of Non-Recurring TCV on Add-On deals (same as CS plan).
 
 Book of Business file: data/am_book_of_business.csv
   Combined file with all AM accounts (one row per account per AM).
@@ -52,7 +52,7 @@ def compute_am_nrr(
     """Return (nrr_df, breakdown_df) for individual AMs.
 
     Uses BoB column 18 (Account Owner 2026) for AM name.
-    One-off services = 20% of Non-Recurring TCV (per AM commission plan).
+    One-off services = 50% of Non-Recurring TCV (same as CS plan).
     """
     bob_path   = os.path.join(data_dir, "am_book_of_business.csv")
     input_path = os.path.join(data_dir, "InputData.csv")
@@ -206,8 +206,8 @@ def compute_am_nrr(
             ].copy()
 
             add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
-            # One-off: 20% of Non-Recurring TCV (per AM commission plan)
-            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.20
+            # One-off: 50% of Non-Recurring TCV (same as CS plan)
+            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
             upsell_down = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -262,7 +262,7 @@ def compute_am_nrr(
             for acct_id, base_arr in sorted(acct_arr.items(), key=lambda x: -x[1]):
                 acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.20
+                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
                 acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
@@ -441,7 +441,7 @@ def compute_am_lead_nrr(
             ].copy()
 
             add_ons     = inp_q[inp_q["_type"] == "Add-On"]["_attainment"].sum()
-            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.20
+            one_off     = inp_q[inp_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
             upsell_down = inp_q[
                 (inp_q["_type"] == "Renewal") & (inp_q["_stage"] != "Closed Lost")
             ]["_attainment"].sum()
@@ -489,7 +489,7 @@ def compute_am_lead_nrr(
             for acct_id, base_arr in sorted(all_acct_arr.items(), key=lambda x: -x[1]):
                 acct_q       = inp_q[inp_q["_account_id_15"] == acct_id]
                 acct_addon   = acct_q[acct_q["_type"] == "Add-On"]["_attainment"].sum()
-                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.20
+                acct_one_off = acct_q[acct_q["_type"] == "Add-On"]["_nr_tcv"].sum() * 0.50
                 acct_upsell  = acct_q[
                     (acct_q["_type"] == "Renewal") & (acct_q["_stage"] != "Closed Lost")
                 ]["_attainment"].sum()
