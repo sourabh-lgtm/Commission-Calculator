@@ -39,6 +39,8 @@ Commission Calculator/
 |   +-- closed_won_commission.py # ACV commission rows from InputData.csv + NetSuite invoices
 |   |                            #   build_closed_won_commission() -> SDR/AM closed-won DataFrame
 |   |                            #   build_ae_closed_won_commission() -> AE closed-won DataFrame
+|   |                            #   compute_se_nb_acv() -> company NB ACV per quarter (RR full + NR 50%)
+|   |                            #   compute_se_arr() -> company ARR at quarter-end (active RR lines)
 |   +-- cs_nrr_loader.py         # NRR from cs_book_of_business.csv + InputData.csv
 |   |                            #   compute_cs_nrr()                   — individual CSA NRR
 |   |                            #   compute_cs_lead_nrr()              — team-aggregate NRR
@@ -155,7 +157,7 @@ Commission Calculator/
 |   +-- am_book_of_business.csv  # AM Book of Business (one row per account per AM)
 |   +-- am_nrr_targets.csv       # Per-AM annual NRR targets
 |   +-- se_targets.csv           # SE quarterly targets: NB ACV + ARR (fixed from FY26 contract)
-|   +-- se_actual_performance.csv# SE actual results per quarter: finance fills in each quarter
+|   +-- se_actual_performance.csv# SE ARR fallback (unused — ARR now computed from InputData)
 |   `-- approval_state.json      # Auto-managed approval state (delete to reset all)
 |
 +-- output/statements/           # Generated PDFs (gitignored)

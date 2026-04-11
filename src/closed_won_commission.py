@@ -856,3 +856,161 @@ def build_ae_closed_won_commission(
     result = pd.DataFrame(rows)
     result = result.dropna(subset=["month"])
     return result.reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# SE New Business ACV — company-wide quarterly aggregation
+# ---------------------------------------------------------------------------
+
+def compute_se_nb_acv(data_dir: str) -> pd.DataFrame:
+    """Return company-wide New Business ACV per (year, quarter) for SE measure.
+
+    Filters InputData.csv to Stage=Closed Won + Type=New Business.
+    Groups by opportunity, computes 1st-year ACV using _calc_first_year_acv():
+      - RR product codes: full 1st-year ACV (prorated to year 1)
+      - NR product codes: 50% of Price x Quantity (one-time)
+    Maps each opportunity to (year, quarter) by its Close Date.
+    Returns DataFrame: year (int), quarter (int), nb_acv_eur (float).
+    """
+    input_path = os.path.join(data_dir, "InputData.csv")
+    if not os.path.exists(input_path):
+        print("[SE NB] InputData.csv not found — SE NB ACV will be 0")
+        return pd.DataFrame(columns=["year", "quarter", "nb_acv_eur"])
+
+    raw = _read_csv(input_path)
+
+    required = ["Opportunity Id Casesafe", "Stage", "Type", "Close Date",
+                "Product Code", "Start Date", "End Date",
+                "Price (converted)", "Duration (years)", "Quantity"]
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        print(f"[SE NB] InputData.csv missing columns: {missing} — SE NB ACV will be 0")
+        return pd.DataFrame(columns=["year", "quarter", "nb_acv_eur"])
+
+    raw = raw[
+        (raw["Stage"].str.strip().str.lower() == "closed won") &
+        (raw["Type"].str.strip().str.lower() == "new business")
+    ].copy()
+
+    if raw.empty:
+        print("[SE NB] No Closed Won New Business rows found")
+        return pd.DataFrame(columns=["year", "quarter", "nb_acv_eur"])
+
+    raw["line_start"] = pd.to_datetime(raw["Start Date"].astype(str).str.strip(),
+                                       format="%d/%m/%Y", errors="coerce")
+    raw["line_end"]   = pd.to_datetime(raw["End Date"].astype(str).str.strip(),
+                                       format="%d/%m/%Y", errors="coerce")
+    raw["Price (converted)"] = pd.to_numeric(
+        raw["Price (converted)"].astype(str).str.replace(",", ""), errors="coerce"
+    ).fillna(0.0)
+    raw["Duration (years)"] = pd.to_numeric(raw["Duration (years)"], errors="coerce").fillna(1.0)
+    raw["Quantity"]         = pd.to_numeric(raw["Quantity"], errors="coerce").fillna(1.0)
+
+    # Compute 1st-year ACV per opportunity
+    acv_by_opp: dict[str, float] = {}
+    for opp_id, grp in raw.groupby("Opportunity Id Casesafe"):
+        acv_by_opp[str(opp_id).strip()] = _calc_first_year_acv(grp)
+
+    # Build opportunity-level summary with close_date
+    opp_cols = ["Opportunity Id Casesafe", "Opportunity Name", "Close Date"]
+    opp_cols = [c for c in opp_cols if c in raw.columns]
+    opps = raw[opp_cols].drop_duplicates(subset=["Opportunity Id Casesafe"]).copy()
+    opps["opportunity_id"] = opps["Opportunity Id Casesafe"].astype(str).str.strip()
+    opps["close_date"] = pd.to_datetime(
+        opps["Close Date"].astype(str).str.strip(), format="%d/%m/%Y", errors="coerce"
+    )
+    opps = opps.dropna(subset=["close_date"])
+    opps["acv_eur"] = opps["opportunity_id"].map(acv_by_opp).fillna(0.0)
+    opps["year"]    = opps["close_date"].dt.year
+    opps["quarter"] = opps["close_date"].dt.month.map(lambda m: (m - 1) // 3 + 1)
+
+    result = (
+        opps.groupby(["year", "quarter"], as_index=False)["acv_eur"]
+        .sum()
+        .rename(columns={"acv_eur": "nb_acv_eur"})
+    )
+    result["year"]    = result["year"].astype(int)
+    result["quarter"] = result["quarter"].astype(int)
+
+    for _, row in result.iterrows():
+        print(f"[SE NB] Q{int(row['quarter'])} {int(row['year'])}: "
+              f"nb_acv_eur={row['nb_acv_eur']:,.0f}")
+
+    return result.reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# SE Company ARR — active subscriptions at quarter-end date
+# ---------------------------------------------------------------------------
+
+def compute_se_arr(data_dir: str) -> pd.DataFrame:
+    """Return company ARR at each quarter-end for SE Measure 2.
+
+    For each quarter, sums Price (converted) × Quantity for all RR product lines
+    across all Closed Won opportunities where:
+      line_start <= quarter_end_date < line_end
+
+    Returns DataFrame: year (int), quarter (int), arr_eur (float).
+    """
+    import calendar
+
+    input_path = os.path.join(data_dir, "InputData.csv")
+    if not os.path.exists(input_path):
+        print("[SE ARR] InputData.csv not found — SE ARR will be 0")
+        return pd.DataFrame(columns=["year", "quarter", "arr_eur"])
+
+    raw = _read_csv(input_path)
+
+    required = ["Opportunity Id Casesafe", "Stage", "Product Code",
+                "Start Date", "End Date", "Price (converted)", "Quantity"]
+    missing = [c for c in required if c not in raw.columns]
+    if missing:
+        print(f"[SE ARR] InputData.csv missing columns: {missing} — SE ARR will be 0")
+        return pd.DataFrame(columns=["year", "quarter", "arr_eur"])
+
+    # Keep only Closed Won RR lines
+    codes = raw["Product Code"].astype(str).str.upper()
+    rr = raw[
+        (raw["Stage"].str.strip().str.lower() == "closed won") &
+        codes.str.startswith("RR")
+    ].copy()
+
+    if rr.empty:
+        print("[SE ARR] No Closed Won RR lines found")
+        return pd.DataFrame(columns=["year", "quarter", "arr_eur"])
+
+    rr["line_start"] = pd.to_datetime(rr["Start Date"].astype(str).str.strip(),
+                                       format="%d/%m/%Y", errors="coerce")
+    rr["line_end"]   = pd.to_datetime(rr["End Date"].astype(str).str.strip(),
+                                       format="%d/%m/%Y", errors="coerce")
+    rr["Price (converted)"] = pd.to_numeric(
+        rr["Price (converted)"].astype(str).str.replace(",", ""), errors="coerce"
+    ).fillna(0.0)
+    rr["Quantity"] = pd.to_numeric(rr["Quantity"], errors="coerce").fillna(1.0)
+    rr["line_arr"] = rr["Price (converted)"] * rr["Quantity"]
+
+    rr = rr.dropna(subset=["line_start", "line_end"])
+    rr = rr[rr["line_end"] > rr["line_start"]]  # sanity check
+
+    rows = []
+    # Check quarters for current and surrounding years (2025-2027)
+    for year in range(2025, 2028):
+        for quarter in range(1, 5):
+            end_month = quarter * 3
+            last_day  = calendar.monthrange(year, end_month)[1]
+            qend      = pd.Timestamp(year=year, month=end_month, day=last_day)
+
+            active = rr[(rr["line_start"] <= qend) & (rr["line_end"] > qend)]
+            arr = round(float(active["line_arr"].sum()), 2)
+            if arr > 0:
+                rows.append({"year": year, "quarter": quarter, "arr_eur": arr})
+                print(f"[SE ARR] Q{quarter} {year} (as of {qend.date()}): "
+                      f"arr_eur={arr:,.0f}  ({len(active)} active RR lines)")
+
+    if not rows:
+        return pd.DataFrame(columns=["year", "quarter", "arr_eur"])
+
+    result = pd.DataFrame(rows)
+    result["year"]    = result["year"].astype(int)
+    result["quarter"] = result["quarter"].astype(int)
+    return result.reset_index(drop=True)

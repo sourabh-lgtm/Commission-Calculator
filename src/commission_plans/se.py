@@ -21,9 +21,11 @@ Quarterly targets (from signed FY26 contract):
   Q4: NB €748k / ARR €13.240m
 
 Data sources:
-  Targets : data/se_targets.csv          (year, quarter, new_business_target_eur, arr_target_eur)
-  Actuals : data/se_actual_performance.csv  (year, quarter, new_business_acv_eur, company_arr_eur)
-  Finance fills in actuals each quarter.
+  Targets     : data/se_targets.csv             (year, quarter, new_business_target_eur, arr_target_eur)
+  NB ACV      : computed from InputData.csv      (Closed Won + New Business, close date in quarter)
+                RR product lines: full 1st-year ACV; NR product lines: 50% of Price x Quantity
+  Company ARR : computed from InputData.csv      (all Closed Won RR lines active at quarter-end date)
+                line_start <= quarter_end_date < line_end; ARR = sum(Price (converted) x Quantity)
 """
 
 import pandas as pd
@@ -116,8 +118,9 @@ class SECommissionPlan(BaseCommissionPlan):
             sal_monthly = self._get_salary_monthly(emp_id, month, salary_history)
             quarterly_bonus_target = sal_monthly * 12 * ANNUAL_BONUS_PCT / 4
 
-            targets = cs_performance.get("se_targets", pd.DataFrame())
-            actual  = cs_performance.get("se_actual",  pd.DataFrame())
+            targets  = cs_performance.get("se_targets", pd.DataFrame())
+            actual   = cs_performance.get("se_actual",  pd.DataFrame())
+            nb_acv_df = cs_performance.get("se_nb_acv", pd.DataFrame())
 
             nb_target = 0.0
             arr_target = 0.0
@@ -130,16 +133,26 @@ class SECommissionPlan(BaseCommissionPlan):
                     nb_target  = float(t_row["new_business_target_eur"].iloc[0])
                     arr_target = float(t_row["arr_target_eur"].iloc[0])
 
-            nb_actual  = 0.0
-            arr_actual = 0.0
-            if not actual.empty:
-                a_row = actual[
-                    (actual["year"].astype(int) == year) &
-                    (actual["quarter"].astype(int) == quarter)
+            # NB ACV: computed from InputData (RR full + NR at 50%) by close date
+            nb_actual = 0.0
+            if not nb_acv_df.empty:
+                nb_row = nb_acv_df[
+                    (nb_acv_df["year"].astype(int) == year) &
+                    (nb_acv_df["quarter"].astype(int) == quarter)
                 ]
-                if not a_row.empty:
-                    nb_actual  = float(a_row["new_business_acv_eur"].iloc[0])
-                    arr_actual = float(a_row["company_arr_eur"].iloc[0])
+                if not nb_row.empty:
+                    nb_actual = float(nb_row["nb_acv_eur"].iloc[0])
+
+            # ARR: active subscriptions at quarter-end, computed from InputData
+            arr_actual = 0.0
+            arr_df = cs_performance.get("se_arr", pd.DataFrame())
+            if not arr_df.empty:
+                arr_row = arr_df[
+                    (arr_df["year"].astype(int) == year) &
+                    (arr_df["quarter"].astype(int) == quarter)
+                ]
+                if not arr_row.empty:
+                    arr_actual = float(arr_row["arr_eur"].iloc[0])
 
             if nb_target > 0:
                 nb_achievement_pct = round(nb_actual / nb_target * 100, 2)
@@ -232,8 +245,9 @@ class SECommissionPlan(BaseCommissionPlan):
                                                cs_performance.get("salary_history"))
         quarterly_bonus_target = sal_monthly * 12 * ANNUAL_BONUS_PCT / 4
 
-        targets = cs_performance.get("se_targets", pd.DataFrame())
-        actual  = cs_performance.get("se_actual",  pd.DataFrame())
+        targets   = cs_performance.get("se_targets", pd.DataFrame())
+        actual    = cs_performance.get("se_actual",  pd.DataFrame())
+        nb_acv_df = cs_performance.get("se_nb_acv",  pd.DataFrame())
 
         nb_target  = arr_target  = 0.0
         nb_actual  = arr_actual  = 0.0
@@ -247,14 +261,24 @@ class SECommissionPlan(BaseCommissionPlan):
                 nb_target  = float(t_row["new_business_target_eur"].iloc[0])
                 arr_target = float(t_row["arr_target_eur"].iloc[0])
 
-        if not actual.empty:
-            a_row = actual[
-                (actual["year"].astype(int) == year) &
-                (actual["quarter"].astype(int) == quarter)
+        # NB ACV from InputData (RR full + NR at 50%) by close date
+        if not nb_acv_df.empty:
+            nb_row = nb_acv_df[
+                (nb_acv_df["year"].astype(int) == year) &
+                (nb_acv_df["quarter"].astype(int) == quarter)
             ]
-            if not a_row.empty:
-                nb_actual  = float(a_row["new_business_acv_eur"].iloc[0])
-                arr_actual = float(a_row["company_arr_eur"].iloc[0])
+            if not nb_row.empty:
+                nb_actual = float(nb_row["nb_acv_eur"].iloc[0])
+
+        # ARR: active subscriptions at quarter-end, computed from InputData
+        arr_df = cs_performance.get("se_arr", pd.DataFrame())
+        if not arr_df.empty:
+            arr_row = arr_df[
+                (arr_df["year"].astype(int) == year) &
+                (arr_df["quarter"].astype(int) == quarter)
+            ]
+            if not arr_row.empty:
+                arr_actual = float(arr_row["arr_eur"].iloc[0])
 
         nb_achievement  = round(nb_actual / nb_target * 100, 2) if nb_target > 0 else 0.0
         arr_achievement = round(arr_actual / arr_target * 100, 2) if arr_target > 0 else 0.0

@@ -828,7 +828,7 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
 
     am_nrr_targets = _read("am_nrr_targets.csv")
 
-    # ---- SE: load quarterly targets and actual performance ----
+    # ---- SE: load quarterly targets, actual ARR, and compute NB ACV from InputData ----
     print("[Pipeline] SE: loading targets and actual performance...")
     se_targets = _read("se_targets.csv")
     se_actual  = _read("se_actual_performance.csv")
@@ -837,6 +837,10 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
             for col in ("year", "quarter"):
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+
+    from src.closed_won_commission import compute_se_nb_acv, compute_se_arr
+    se_nb_acv = compute_se_nb_acv(data_dir)
+    se_arr    = compute_se_arr(data_dir)
 
     # Normalise year/quarter columns
     for df in (nrr, am_nrr):
@@ -869,6 +873,8 @@ def _load_cs_performance(data_dir: str, employees_df: pd.DataFrame | None = None
         "am_multi_year_acv":      am_multi_year_acv,
         "se_targets":             se_targets,
         "se_actual":              se_actual,
+        "se_nb_acv":              se_nb_acv,
+        "se_arr":                 se_arr,
     }
 
 

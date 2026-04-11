@@ -447,12 +447,13 @@ total     = nb_bonus + arr_bonus
 
 ### Data Sources
 
-| Source | File | Key columns |
+| Source | File / Function | Detail |
 |---|---|---|
-| Quarterly targets | `data/se_targets.csv` | `year`, `quarter`, `new_business_target_eur`, `arr_target_eur` |
-| Actual performance | `data/se_actual_performance.csv` | `year`, `quarter`, `new_business_acv_eur`, `company_arr_eur` |
+| Quarterly targets | `data/se_targets.csv` | `year`, `quarter`, `new_business_target_eur`, `arr_target_eur` — fixed from signed FY26 contract |
+| NB ACV actuals | `compute_se_nb_acv()` in `closed_won_commission.py` | Derived from `InputData.csv`: `Stage=Closed Won`, `Type=New Business`, close date in quarter. RR lines: full 1st-year ACV; NR lines: 50% of `Price × Quantity` |
+| Company ARR actuals | `compute_se_arr()` in `closed_won_commission.py` | Derived from `InputData.csv`: all `Stage=Closed Won` RR lines where `line_start ≤ quarter_end_date < line_end`. ARR = `sum(Price (converted) × Quantity)` |
 
-Finance enters actuals in `se_actual_performance.csv` each quarter. Targets are fixed from the signed FY26 contract.
+Both actuals are recomputed from InputData on every pipeline run. No manual data entry required.
 
 ### Report Functions
 
@@ -506,6 +507,6 @@ Finance accruals show `salary_monthly × 0.20` every month (full potential) rega
 
 18. **AM Lead team aggregate**: `compute_am_lead_nrr()` pools all accounts across all AMs (identified by am/am_lead role) for the lead's NRR score.
 
-19. **SE bonus uses company-level metrics**: both measures (New Business ACV and ARR) are company-wide, not per-employee. Both SEs get the same payout tier for each measure; only the bonus amount differs due to different salaries. Finance enters actuals quarterly in `se_actual_performance.csv`.
+19. **SE bonus uses company-level metrics**: both measures (New Business ACV and ARR) are company-wide, not per-employee. Both SEs get the same payout tier for each measure; only the bonus amount differs due to different salaries. Both actuals are computed automatically from `InputData.csv` on every pipeline run — no manual data entry required.
 
 20. **SE payout is purely quarterly**: no year-end true-up mechanism in the calculation engine (the contract's "catch-up" language refers to payroll timing, not a separate calculation). 125% tier applies each quarter if achievement > 110%.
