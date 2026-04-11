@@ -51,7 +51,7 @@ Commission Calculator/
 |   |                            #   compute_am_lead_nrr()    — team-aggregate NRR
 |   |                            #   compute_am_multi_year_acv() — multi-year ACV for AMs
 |   |                            #   BoB col 18 (index 18) = "Account Owner 2026" column
-|   |                            #   One-off services = 50% of Non-Recurring TCV (same as CS)
+|   |                            #   One-off services = 50% of OO product lines (Product Code starts "OO")
 |   +-- spif.py                  # SPIF award calculation (Q1 2026)
 |   |                            #   calculate_sdr_spif()   — 8-week window between SAO and close
 |   |                            #   calculate_ae_spif()    — first AE to hit Q1 target
@@ -418,7 +418,7 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 | **CS commission** | | |
 | CS bonus showing 0 (all measures) | `src/commission_plans/cs.py` | Check cs_nrr_targets.csv, cs_csat_report.csv, cs_credits_report.csv have data for (employee, quarter) |
 | CS NRR wrong | `src/cs_nrr_loader.py` | `compute_cs_nrr()` — NRR formula; check BoB col 19 for CSA name; verify account ID 15-char match |
-| CS NRR one-off not appearing | `src/cs_nrr_loader.py` | Add-On deal must have non-zero `Non-Recurring TCV (converted)` in InputData; 50% goes to CSA |
+| CS NRR one-off not appearing | `src/cs_nrr_loader.py` | Add-On deal must have Product Code starting with "OO"; one-off = 50% of Price×Qty summed pre-dedup |
 | CS NRR synthetic churn wrong | `src/cs_nrr_loader.py` | Accounts with Renewal Date in YTD window + no Renewal record -> synthetic churn (-ARR) |
 | CS NRR target/tier wrong | `src/commission_plans/cs.py` | `_quarterly_nrr_target()` and `_nrr_payout_fraction()` — derived from cs_nrr_targets.csv annual target |
 | CS NRR accelerator not appearing | `src/commission_plans/cs.py` | `calculate_quarterly_accelerator()` — Q4-only for CSA; all quarters for cs_lead |
@@ -430,7 +430,7 @@ Single HTML page assembled by `build_dashboard_html(role)` in `dashboards/__init
 | CS employee has wrong BoB | `src/cs_nrr_loader.py` | BoB col 19 (index 19) = "CSA 2026"; 15-char account ID match to InputData 18-char IDs |
 | **AM commission** | | |
 | AM bonus showing 0 | `src/commission_plans/am.py` | Check am_nrr_targets.csv has row for employee + year; verify am_book_of_business.csv loaded |
-| AM NRR wrong | `src/am_nrr_loader.py` | `compute_am_nrr()` — BoB col 18 (index 18) = "Account Owner 2026"; 20% one-off (not 50%) |
+| AM NRR wrong | `src/am_nrr_loader.py` | `compute_am_nrr()` — BoB col 18 (index 18) = "Account Owner 2026"; one-off = 50% of OO product lines |
 | AM NRR account missing from BoB | `src/am_nrr_loader.py` | Check am_book_of_business.csv col 18 for AM name; 15-char account ID match |
 | AM NRR target/tier wrong | `src/commission_plans/am.py` | Uses same `_quarterly_nrr_target()` / `_nrr_payout_fraction()` as CSA (inherited from cs.py) |
 | AM NRR accelerator not appearing | `src/commission_plans/am.py` | `calculate_quarterly_accelerator()` — Q4-only; reads from cs_performance["am_nrr"] |

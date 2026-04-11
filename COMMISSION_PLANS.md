@@ -1,7 +1,7 @@
 # Commission Plans — Rates, Formulas & Payout Tiers
 
 > This file documents the math behind every commission plan. For which file to edit, see `ARCHITECTURE.md`.
-> Last updated: 2026-04-11 (AM dashboard + PDF implemented).
+> Last updated: 2026-04-11 (AM dashboard + PDF; OO product code filter for one-off services).
 
 ---
 
@@ -126,7 +126,7 @@ NRR = (ARR + add_ons + one_off + upsell_downsell + churn) / ARR × 100
 |---|---|---|
 | `ARR` | `cs_book_of_business.csv` col 10 (index 9) = "Flat Renewal ACV (converted)" | Base denominator |
 | `add_ons` | InputData `Attainment New ACV` where `Type=Add-On` | Recurring expansion |
-| `one_off` | **50%** of InputData `Non-Recurring TCV (converted)` where `Type=Add-On` | CSA share of one-off services |
+| `one_off` | **50%** of `Price × Quantity` for lines where `Product Code` starts with `"OO"` and `Type=Add-On` | Summed pre-dedup per opportunity; OO total merged onto deduplicated table |
 | `upsell_downsell` | InputData `Attainment New ACV` where `Type=Renewal` + not Closed Lost | Renewal delta |
 | `churn` | InputData `Attainment New ACV` where `Type=Renewal` + `Stage=Closed Lost` | Already negative |
 
@@ -348,7 +348,7 @@ Targets from `am_nrr_targets.csv` (columns: `employee_id`, `year`, `nrr_target_p
 NRR = (ARR + add_ons + one_off + upsell_downsell + churn) / ARR × 100
 ```
 
-**Key difference from CS**: none for one-off services — both CS and AM use **50%** of Non-Recurring TCV.
+**Key difference from CS**: none for one-off services — both CS and AM identify one-off services by `Product Code` starting with `"OO"` and apply **50%** of `Price × Quantity` per OO line.
 
 **BoB column indices** (am_book_of_business.csv):
 - Index 5 = Account Name
@@ -416,7 +416,7 @@ Structurally identical to AM, with one difference:
 
 11. **Plan window enforcement**: `plan_start_date`/`plan_end_date` from Humaans ensure employees only get commission for months they were in the role.
 
-12. **One-off services split**: Add-On deals with Non-Recurring TCV → both CSA and AM get **50%** included in their NRR numerator. The other 50% is business margin and not modelled. Visible in NRR workings as "One-off svc (50%)".
+12. **One-off services split**: Add-On deals with `Product Code` starting with `"OO"` → both CSA and AM get **50%** of `Price × Quantity` included in their NRR numerator. OO totals are summed pre-deduplication per opportunity (so mixed OO/non-OO deals are handled correctly). The other 50% is business margin and not modelled. Visible in NRR workings as "One-off svc (50%)".
 
 13. **Multi-year ACV requires CS ownership** (CS plan): CS leads only earn multi-year ACV commission when the Opportunity Owner is a CS employee. AM/AE-owned deals excluded.
 
